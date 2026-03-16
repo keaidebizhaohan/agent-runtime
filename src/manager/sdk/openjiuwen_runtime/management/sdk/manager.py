@@ -15,22 +15,23 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Dict, Any
 
+from .foundation.log import get_logger
 from .models.enums import DeploymentType, DeploymentStatus
 from .database.mysql import MySQLDatabase
 from .deployer.local_subprocess import LocalSubprocessDeployer
 from .utils.id_generator import generate_deployment_id
 from .utils.port_manager import allocate_port
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class DeploymentManager:
     """部署管理器 (v2.0)"""
 
     def __init__(
-        self,
-        default_deployer_type: str = "local_subprocess",
-        venvs_root: str = "./venvs",
+            self,
+            default_deployer_type: str = "local_subprocess",
+            venvs_root: str = "./venvs",
     ):
         """初始化部署管理器
 
@@ -51,10 +52,10 @@ class DeploymentManager:
         )
 
     def package_python_to_whl(
-        self,
-        python_file_path: str,
-        name: str,
-        temp_dir: Optional[str] = None,
+            self,
+            python_file_path: str,
+            name: str,
+            temp_dir: Optional[str] = None,
     ) -> str:
         """
         将 Python 文件打包为 WHL 包
@@ -160,14 +161,14 @@ setup(
         return deployer
 
     async def deploy_agent(
-        self,
-        python_file_path: str,
-        name: str,
-        deployer_type: str = None,
-        port: Optional[int] = None,
-        user_id: Optional[str] = None,
-        space_id: Optional[str] = None,
-        **deployer_kwargs
+            self,
+            python_file_path: str,
+            name: str,
+            deployer_type: str = None,
+            port: Optional[int] = None,
+            user_id: Optional[str] = None,
+            space_id: Optional[str] = None,
+            **deployer_kwargs
     ) -> Dict[str, Any]:
         """
         部署 Agent (v2.1 - 支持租户隔离)
@@ -267,14 +268,14 @@ setup(
             raise
 
     async def deploy_plugin(
-        self,
-        python_file_path: str,
-        name: str,
-        deployer_type: str = None,
-        port: Optional[int] = None,
-        user_id: Optional[str] = None,
-        space_id: Optional[str] = None,
-        **deployer_kwargs
+            self,
+            python_file_path: str,
+            name: str,
+            deployer_type: str = None,
+            port: Optional[int] = None,
+            user_id: Optional[str] = None,
+            space_id: Optional[str] = None,
+            **deployer_kwargs
     ) -> Dict[str, Any]:
         """
         部署 Plugin (v2.1 - 支持租户隔离)
@@ -374,11 +375,11 @@ setup(
             raise
 
     async def list_deployments(
-        self,
-        deployment_type: Optional[DeploymentType] = None,
-        status: Optional[DeploymentStatus] = None,
-        user_id: Optional[str] = None,
-        space_id: Optional[str] = None,
+            self,
+            deployment_type: Optional[DeploymentType] = None,
+            status: Optional[DeploymentStatus] = None,
+            user_id: Optional[str] = None,
+            space_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """查询部署列表（实时检查状态并更新数据库，支持租户过滤）
 
@@ -391,7 +392,8 @@ setup(
         Returns:
             部署列表
         """
-        logger.info(f"Listing deployments: type={deployment_type}, status={status}, user_id={user_id}, space_id={space_id}")
+        logger.info(
+            f"Listing deployments: type={deployment_type}, status={status}, user_id={user_id}, space_id={space_id}")
         type_str = deployment_type.value if deployment_type else None
         status_str = status.value if status else None
         deployments = await self.db.list_deployments(
@@ -406,7 +408,8 @@ setup(
             deployer = self._get_deployer(deployment["deployer_type"])
             current_status = await deployer.get_status(deployment)
             if current_status.value != deployment["status"]:
-                logger.info(f"Deployment {deployment['deployment_id']} status changed: {deployment['status']} -> {current_status.value}")
+                logger.info(
+                    f"Deployment {deployment['deployment_id']} status changed: {deployment['status']} -> {current_status.value}")
                 await self.db.update_deployment_status(
                     deployment["deployment_id"],
                     current_status.value,
@@ -423,10 +426,10 @@ setup(
         )
 
     async def get_deployment(
-        self,
-        deployment_id: str,
-        user_id: Optional[str] = None,
-        space_id: Optional[str] = None,
+            self,
+            deployment_id: str,
+            user_id: Optional[str] = None,
+            space_id: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """获取部署详情（实时检查状态并更新数据库，支持租户过滤）
 
@@ -468,10 +471,10 @@ setup(
         return deployment
 
     async def delete_deployment(
-        self,
-        deployment_id: str,
-        user_id: Optional[str] = None,
-        space_id: Optional[str] = None,
+            self,
+            deployment_id: str,
+            user_id: Optional[str] = None,
+            space_id: Optional[str] = None,
     ) -> bool:
         """删除部署（包括虚拟环境清理，支持租户过滤）
 

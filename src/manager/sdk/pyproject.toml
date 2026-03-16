@@ -25,21 +25,19 @@ dev = [
     "pytest-asyncio==1.2.0",
     "pytest-mock==3.14.0",
     "ruff==0.9.10",
+    "PyYAML>=6.0",
 ]
 
 [[tool.uv.index]]
 url = "https://mirrors.aliyun.com/pypi/simple/"
 
 [tool.setuptools]
-packages = ["openjiuwen_runtime.management.sdk",
-            "openjiuwen_runtime.management.sdk.models",
-            "openjiuwen_runtime.management.sdk.database",
-            "openjiuwen_runtime.management.sdk.deployer",
-            "openjiuwen_runtime.management.sdk.utils"]
+packages = ["openjiuwen_runtime.management.sdk"]
 
 [tool.setuptools.package-dir]
-"openjiuwen_runtime.management.sdk" = "src"
-"openjiuwen_runtime.management.sdk.models" = "src/models"
-"openjiuwen_runtime.management.sdk.database" = "src/database"
-"openjiuwen_runtime.management.sdk.deployer" = "src/deployer"
-"openjiuwen_runtime.management.sdk.utils" = "src/utils"
+"openjiuwen_runtime.management.sdk" = "openjiuwen_runtime/management/sdk"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# 关键：添加项目根目录到Python路径
+pythonpath = ["."]
