@@ -61,12 +61,15 @@ class DeploymentManager:
 
         Args:
             python_file_path: Python 文件路径
-            name: 包名（用于打包和 python -m 运行）
+            name: 部署名称（仅用于显示，不用于包名）
             temp_dir: 临时目录（可选，默认使用系统临时目录）
 
         Returns:
             WHL 包文件路径
         """
+        # 统一使用固定包名，避免中文名问题
+        package_name = "openjiuwen_agent"
+
         # 读取 Python 文件内容
         python_file = Path(python_file_path)
         if not python_file.exists():
@@ -92,29 +95,34 @@ class DeploymentManager:
             Path(temp_dir).mkdir(parents=True, exist_ok=True)
 
         try:
-            # 创建包目录结构
-            package_dir = Path(temp_dir) / name
+            # 创建包目录结构（使用固定包名）
+            package_dir = Path(temp_dir) / package_name
             package_dir.mkdir(exist_ok=True)
 
             # 创建 __main__.py
             main_py = package_dir / "__main__.py"
             main_py.write_text(code_content, encoding='utf-8')
 
-            # 创建 setup.py
+            # 创建 setup.py（使用固定包名）
             setup_py = Path(temp_dir) / "setup.py"
-            install_requires_str = str(install_requires).replace("'", '"')
-            setup_content = f'''
-from setuptools import setup, find_packages
+            # 显式处理 install_requires，确保格式正确
+            if install_requires:
+                install_requires_str = str(install_requires).replace("'", '"')
+            else:
+                install_requires_str = "[]"
+
+            setup_content = f'''from setuptools import setup, find_packages
 
 setup(
-    name="{name}",
+    name="{package_name}",
     version="1.0.0",
     packages=find_packages(),
-    py_modules=["{name}.__main__"],
+    py_modules=["{package_name}.__main__"],
     install_requires={install_requires_str},
 )
 '''
             setup_py.write_text(setup_content, encoding='utf-8')
+            logger.info(f"Generated setup.py:\n{setup_content}")
 
             # 使用 subprocess 调用 build 命令打包
             import subprocess
@@ -199,7 +207,7 @@ setup(
         deployment_record = {
             "deployment_id": deployment_id,
             "type": DeploymentType.AGENT,
-            "name": name,  # 部署名称=包名
+            "name": name,  # 部署名称（用户输入，可以是中文）
             "status": DeploymentStatus.PENDING,
             # v2.1 新增：租户字段
             "user_id": user_id or "admin",  # CLI 默认使用 admin
@@ -210,7 +218,7 @@ setup(
             "pid": None,
             # v2.0 新增字段
             "venv_path": f"{self.venvs_root}/{deployment_id}",
-            "package_name": name,  # 包名
+            "package_name": "openjiuwen_agent",  # 固定包名
             "whl_path": whl_path,
             # 时间戳
             "created_at": now,
@@ -221,10 +229,10 @@ setup(
         await self.db.create_deployment(deployment_record)
 
         try:
-            # 使用部署器部署
+            # 使用部署器部署（使用固定包名运行）
             result = await deployer.deploy(
                 whl_path=whl_path,
-                name=name,
+                name="openjiuwen_agent",  # 固定包名，用于 python -m
                 deployment_id=deployment_id,
                 port=port,
                 **deployer_kwargs
@@ -306,22 +314,18 @@ setup(
         deployment_record = {
             "deployment_id": deployment_id,
             "type": DeploymentType.PLUGIN,
-            "name": name,
+            "name": name,  # 部署名称（用户输入，可以是中文）
             "status": DeploymentStatus.PENDING,
             # v2.1 新增：租户字段
             "user_id": user_id or "admin",
             "space_id": space_id or "default",
-            "deployment_id": deployment_id,
-            "type": DeploymentType.PLUGIN,
-            "name": name,  # 部署名称=包名
-            "status": DeploymentStatus.PENDING,
             "url": None,
             "deployer_type": deployer_type,
             "port": port,
             "pid": None,
             # v2.0 新增字段
             "venv_path": f"{self.venvs_root}/{deployment_id}",
-            "package_name": name,  # 包名
+            "package_name": "openjiuwen_agent",  # 固定包名
             "whl_path": whl_path,
             # 时间戳
             "created_at": now,
@@ -332,10 +336,10 @@ setup(
         await self.db.create_deployment(deployment_record)
 
         try:
-            # 使用部署器部署
+            # 使用部署器部署（使用固定包名运行）
             result = await deployer.deploy(
                 whl_path=whl_path,
-                name=name,
+                name="openjiuwen_agent",  # 固定包名，用于 python -m
                 deployment_id=deployment_id,
                 port=port,
                 **deployer_kwargs

@@ -127,8 +127,8 @@ class LocalSubprocessDeployer(Deployer):
 
             process = subprocess.Popen(
                 cmd,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 creationflags=creation_flags,
             )
 
@@ -137,11 +137,16 @@ class LocalSubprocessDeployer(Deployer):
 
             if process.poll() is not None:
                 # 进程已经退出，读取错误信息
-                stderr = process.stderr.read()
-                stdout = process.stdout.read()
+                stderr_bytes, stdout_bytes = process.communicate()
+                stderr = stderr_bytes.decode('utf-8', errors='replace') if stderr_bytes else ''
+                stdout = stdout_bytes.decode('utf-8', errors='replace') if stdout_bytes else ''
                 error_msg = stderr or stdout or "Unknown error"
                 logger.error(f"Process exited for {deployment_id}: {error_msg}")
                 raise RuntimeError(f"Process exited: {error_msg}")
+
+            # 进程正常运行，关闭管道避免资源泄漏
+            process.stdout.close()
+            process.stderr.close()
 
             logger.info(f"Deployment {deployment_id} succeeded, PID: {process.pid}")
             return {

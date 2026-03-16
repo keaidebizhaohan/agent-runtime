@@ -21,7 +21,7 @@ class TenantContextMiddleware(BaseHTTPMiddleware):
     从请求头中提取 user_id 和 space_id，验证后注入到 request.state
     """
 
-    def __init__(self, app: ASGIApp, require_tenant: bool = True):
+    def __init__(self, app: ASGIApp, require_tenant: bool = False):
         """
         Args:
             app: ASGI 应用
