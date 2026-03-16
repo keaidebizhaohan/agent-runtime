@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "openjiuwen-runtime-management-sdk"
+version = "0.1.0"
+description = "OpenJiuwen Runtime"
+requires-python = ">=3.11.4"
+dependencies = [
+    "build>=1.0.0",
+    "sqlalchemy>=2.0.0",
+    "pymysql>=1.0.0",
+    "pydantic>=2.0.0",
+    "cryptography>=42.0.0",
+]
+
+[tool.uv]
+default-groups = ['dev']
+
+[dependency-groups]
+dev = [
+    "coverage==7.8.0",
+    "pytest==8.3.5",
+    "pytest-asyncio==1.2.0",
+    "pytest-mock==3.14.0",
+    "ruff==0.9.10",
+]
+
+[[tool.uv.index]]
+url = "https://mirrors.aliyun.com/pypi/simple/"
+
+[tool.setuptools]
+packages = ["openjiuwen_runtime.management.sdk",
+            "openjiuwen_runtime.management.sdk.models",
+            "openjiuwen_runtime.management.sdk.database",
+            "openjiuwen_runtime.management.sdk.deployer",
+            "openjiuwen_runtime.management.sdk.utils"]
+
+[tool.setuptools.package-dir]
+"openjiuwen_runtime.management.sdk" = "src"
+"openjiuwen_runtime.management.sdk.models" = "src/models"
+"openjiuwen_runtime.management.sdk.database" = "src/database"
+"openjiuwen_runtime.management.sdk.deployer" = "src/deployer"
+"openjiuwen_runtime.management.sdk.utils" = "src/utils"
