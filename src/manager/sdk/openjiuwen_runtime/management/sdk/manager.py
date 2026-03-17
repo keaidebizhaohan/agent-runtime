@@ -43,12 +43,16 @@ DEPLOYMENT_TABLE_DEF = TableDefinition(
         ColumnDefinition(DeploymentFields.DEPLOYMENT_STATUS, "string", length=32, nullable=False),
         ColumnDefinition(DeploymentFields.NAME, "string", length=255, nullable=False),
         ColumnDefinition(DeploymentFields.URL, "string", length=512, nullable=True),
+        ColumnDefinition(DeploymentFields.USER_ID, "string", length=64, nullable=True),
+        ColumnDefinition(DeploymentFields.SPACE_ID, "string", length=64, nullable=True),
         ColumnDefinition(DeploymentFields.CREATED_AT, "datetime", nullable=False),
         ColumnDefinition(DeploymentFields.UPDATED_AT, "datetime", nullable=False),
         ColumnDefinition(DeploymentFields.DATA, "json", nullable=True),
     ],
     indexes=[
         IndexDefinition([DeploymentFields.DEPLOYMENT_ID], unique=True),
+        IndexDefinition([DeploymentFields.USER_ID], unique=False),
+        IndexDefinition([DeploymentFields.SPACE_ID], unique=False),
     ],
 )
 
@@ -112,15 +116,19 @@ class DeploymentManager:
             name: str,
             version: str,
             mode: DeployMode = DeployMode.SUBPROCESS,
+            user_id: Optional[str] = None,
+            space_id: Optional[str] = None,
             **kwargs: Any,
     ) -> DeploymentInfo:
         """部署Agent"""
-        logger.info(f"Deploying agent: name={name}, version={version}, mode={mode}")
+        logger.info(f"Deploying agent: name={name}, version={version}, mode={mode}, user_id={user_id}, space_id={space_id}")
         return await self._deploy(
             deployment_type=DeploymentType.AGENT,
             name=name,
             version=version,
             mode=mode,
+            user_id=user_id,
+            space_id=space_id,
             **kwargs,
         )
 
@@ -130,16 +138,20 @@ class DeploymentManager:
             version: str,
             mode: DeployMode = DeployMode.SUBPROCESS,
             url: Optional[str] = None,
+            user_id: Optional[str] = None,
+            space_id: Optional[str] = None,
             **kwargs: Any,
     ) -> DeploymentInfo:
         """部署Plugin"""
-        logger.info(f"Deploying plugin: name={name}, version={version}, mode={mode}")
+        logger.info(f"Deploying plugin: name={name}, version={version}, mode={mode}, user_id={user_id}, space_id={space_id}")
         return await self._deploy(
             deployment_type=DeploymentType.PLUGIN,
             name=name,
             version=version,
             mode=mode,
             url=url,
+            user_id=user_id,
+            space_id=space_id,
             **kwargs,
         )
 
@@ -149,6 +161,8 @@ class DeploymentManager:
             name: str,
             version: str,
             mode: DeployMode,
+            user_id: Optional[str] = None,
+            space_id: Optional[str] = None,
             **kwargs: Any,
     ) -> DeploymentInfo:
         """内部部署方法"""
@@ -163,6 +177,8 @@ class DeploymentManager:
             deployment_type=deployment_type,
             name=name,
             url=kwargs.get("url"),
+            user_id=user_id,
+            space_id=space_id,
             data=kwargs.get("data"),
         )
         deployment_data = create_model.model_dump()
@@ -198,17 +214,23 @@ class DeploymentManager:
             self,
             deployment_type: Optional[DeploymentType] = None,
             deployment_status: Optional[DeploymentStatus] = None,
+            user_id: Optional[str] = None,
+            space_id: Optional[str] = None,
             limit: int = 100,
             offset: int = 0,
     ) -> list[DeploymentInfo]:
         """列出部署"""
         logger.debug(
-            f"Listing deployments: type={deployment_type}, status={deployment_status}, limit={limit}, offset={offset}")
+            f"Listing deployments: type={deployment_type}, status={deployment_status}, user_id={user_id}, space_id={space_id}, limit={limit}, offset={offset}")
         filters = {}
         if deployment_type:
             filters[DeploymentFields.DEPLOYMENT_TYPE] = deployment_type.value
         if deployment_status:
             filters[DeploymentFields.DEPLOYMENT_STATUS] = deployment_status.value
+        if user_id:
+            filters[DeploymentFields.USER_ID] = user_id
+        if space_id:
+            filters[DeploymentFields.SPACE_ID] = space_id
 
         records = await self.db_handler.list_records(
             DEPLOYMENT_TABLE_NAME, filters=filters if filters else None, limit=limit, offset=offset

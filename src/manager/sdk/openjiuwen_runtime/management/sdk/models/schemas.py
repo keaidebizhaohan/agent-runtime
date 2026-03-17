@@ -18,6 +18,8 @@ class DeploymentFields:
     DEPLOYMENT_STATUS = "deployment_status"
     NAME = "name"
     URL = "url"
+    USER_ID = "user_id"
+    SPACE_ID = "space_id"
     CREATED_AT = "created_at"
     UPDATED_AT = "updated_at"
     DATA = "data"
@@ -30,6 +32,8 @@ class DeploymentCreate(BaseModel):
     deployment_type: DeploymentType = Field(..., description="部署类型")
     name: str = Field(..., description="部署名称")
     url: Optional[str] = Field(None, description="服务URL")
+    user_id: Optional[str] = Field(None, description="用户ID")
+    space_id: Optional[str] = Field(None, description="空间ID")
     data: Optional[dict[str, Any]] = Field(None, description="扩展数据")
 
 
@@ -42,6 +46,8 @@ class DeploymentInfo(BaseModel):
     deployment_status: DeploymentStatus
     name: str
     url: Optional[str] = None
+    user_id: Optional[str] = None
+    space_id: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
     data: Optional[dict[str, Any]] = None
