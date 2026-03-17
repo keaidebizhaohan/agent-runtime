@@ -24,7 +24,7 @@ class VirtualEnvironmentManager:
         Args:
             venvs_root: 虚拟环境根目录路径
         """
-        self.venvs_root = Path(venvs_root)
+        self.venvs_root = Path(venvs_root).resolve()
         self.venvs_root.mkdir(parents=True, exist_ok=True)
         logger.info(f"VirtualEnvironmentManager initialized with root: {self.venvs_root}")
 
@@ -50,13 +50,48 @@ class VirtualEnvironmentManager:
         logger.info(f"Creating virtual environment: {venv_path}")
 
         try:
-            # 使用python -m venv创建虚拟环境
-            subprocess.run(
+            result = subprocess.run(
                 [sys.executable, "-m", "venv", str(venv_path)],
-                check=True,
                 capture_output=True,
                 text=True
             )
+
+            if result.returncode != 0:
+                logger.warning(f"venv command returned code {result.returncode}: {result.stderr}")
+
+            if not venv_path.exists():
+                logger.error(f"Virtual environment directory not created: {venv_path}")
+                raise RuntimeError(f"Failed to create venv: directory not created")
+
+            if sys.platform == "win32":
+                python_exe = venv_path / "Scripts" / "python.exe"
+                pip_exe = venv_path / "Scripts" / "pip.exe"
+            else:
+                python_exe = venv_path / "bin" / "python"
+                pip_exe = venv_path / "bin" / "pip"
+
+            if not python_exe.exists():
+                logger.error(f"Python executable not found in venv: {python_exe}")
+                raise RuntimeError(f"Failed to create venv: python executable not found")
+
+            if not pip_exe.exists():
+                logger.info(f"pip not found, running ensurepip...")
+                ensure_result = subprocess.run(
+                    [str(python_exe), "-m", "ensurepip", "--upgrade"],
+                    capture_output=True,
+                    text=True
+                )
+                if ensure_result.returncode != 0:
+                    logger.warning(f"ensurepip returned code {ensure_result.returncode}: {ensure_result.stderr}")
+                    get_pip_result = subprocess.run(
+                        [str(python_exe), "-m", "pip", "install", "--upgrade", "pip"],
+                        capture_output=True,
+                        text=True
+                    )
+                    if get_pip_result.returncode != 0:
+                        logger.error(f"Failed to bootstrap pip: {get_pip_result.stderr}")
+                        raise RuntimeError(f"Failed to create venv: pip not available")
+
             logger.info(f"Virtual environment created successfully: {venv_path}")
             return venv_path
         except subprocess.CalledProcessError as e:
@@ -112,20 +147,41 @@ class VirtualEnvironmentManager:
         logger.info(f"Installing WHL package: {whl_path} into {deployment_id}")
 
         try:
-            # 使用虚拟环境的pip安装WHL包
-            subprocess.run(
+            result = subprocess.run(
                 [
                     str(python_executable), "-m", "pip", "install",
                     whl_path
                 ],
                 capture_output=True,
-                text=True,
-                check=True
+                text=True
             )
-            logger.info(f"WHL package installed successfully: {whl_path}")
-            return True
-        except subprocess.CalledProcessError as e:
-            logger.error(f"Failed to install WHL: {e.stderr}")
+
+            if result.returncode != 0:
+                logger.warning(f"pip install returned code {result.returncode}: {result.stderr}")
+
+            result = subprocess.run(
+                [str(python_executable), "-m", "pip", "list", "--format=json"],
+                capture_output=True,
+                text=True
+            )
+
+            if result.returncode == 0:
+                import json
+                installed_packages = json.loads(result.stdout)
+                whl_name = Path(whl_path).stem.split("-")[0].lower().replace("_", "-")
+                for pkg in installed_packages:
+                    if pkg["name"].lower().replace("_", "-") == whl_name:
+                        logger.info(f"WHL package installed successfully: {whl_path}")
+                        return True
+
+                logger.error(f"WHL package not found in installed list: {whl_path}")
+                raise RuntimeError(f"Failed to install WHL package: package not in pip list")
+            else:
+                logger.error(f"Failed to verify installation: {result.stderr}")
+                raise RuntimeError(f"Failed to verify WHL installation")
+
+        except Exception as e:
+            logger.error(f"Failed to install WHL: {e}")
             raise RuntimeError(f"Failed to install WHL package: {e}")
 
     def delete_venv(self, deployment_id: str) -> bool:

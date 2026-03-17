@@ -1,27 +1,35 @@
-"""OpenJiuwen Runtime Management SDK"""
+"""部署模块
 
-from .manager import DeploymentManager, DeployMode
-from .models.enums import DeploymentType, DeploymentStatus
-from .models.schemas import DeploymentInfo, DEPLOYMENT_TABLE_NAME, DeploymentFields
-from .db.handler import DBHandler
-from .deployments import (
+提供三种部署模式:
+- subprocess: 本地进程部署
+- docker: Docker容器部署
+- k8s: Kubernetes部署
+"""
+
+from .base import (
     CommonParams,
     DeployContext,
     DeployResult,
     Deployer,
     BaseDeploymentStrategy,
+)
+from .subprocess import (
     SubprocessParams,
     ProcessInfo,
     ProcessCreate,
     PROCESS_TABLE_DEF,
     LocalSubprocessDeployer,
     SubprocessStrategy,
+)
+from .docker import (
     DockerParams,
     DockerInfo,
     DockerCreate,
     DOCKER_TABLE_DEF,
     DockerDeployer,
     DockerStrategy,
+)
+from .k8s import (
     K8sParams,
     K8sInfo,
     K8sCreate,
@@ -30,24 +38,7 @@ from .deployments import (
     K8sStrategy,
 )
 
-from .db.sqlite_handler import SQLiteHandler
-from .db.mysql_handler import MySQLHandler
-
 __all__ = [
-    # Manager
-    "DeploymentManager",
-    "DeployMode",
-    # Enums
-    "DeploymentType",
-    "DeploymentStatus",
-    # Schemas
-    "DeploymentInfo",
-    "DEPLOYMENT_TABLE_NAME",
-    "DeploymentFields",
-    # DB
-    "DBHandler",
-    "SQLiteHandler",
-    "MySQLHandler",
     # Base
     "CommonParams",
     "DeployContext",

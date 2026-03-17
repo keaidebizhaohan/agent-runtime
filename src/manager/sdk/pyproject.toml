@@ -8,24 +8,36 @@ version = "0.1.0"
 description = "OpenJiuwen Runtime"
 requires-python = ">=3.11.4"
 dependencies = [
+    # service
     "build>=1.0.0",
+    "aiohttp>=3.9.0",
+    # config
+    "pyyaml>=6.0",
+    # db
     "sqlalchemy>=2.0.0",
     "pymysql>=1.0.0",
-    "pydantic>=2.0.0",
     "cryptography>=42.0.0",
+    "pydantic>=2.0.0",
+    "pydantic-settings>=2.0.0",
+    "sqlalchemy>=2.0.0",
+    "aiomysql>=0.2.0",
+    "aiosqlite>=0.19.0",
+    "redis>=5.0.0",
+    # lint
+    "ruff==0.9.10",
 ]
 
 [tool.uv]
 default-groups = ['dev']
+pip = true
 
 [dependency-groups]
 dev = [
+    # test
     "coverage==7.8.0",
     "pytest==8.3.5",
     "pytest-asyncio==1.2.0",
     "pytest-mock==3.14.0",
-    "ruff==0.9.10",
-    "PyYAML>=6.0",
 ]
 
 [[tool.uv.index]]
@@ -39,5 +51,4 @@ packages = ["openjiuwen_runtime.management.sdk"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-# 关键：添加项目根目录到Python路径
 pythonpath = ["."]

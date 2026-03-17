@@ -1,0 +1,80 @@
+"""Subprocess 部署策略"""
+
+from datetime import datetime
+from typing import Any
+
+from ..base.strategy import BaseDeploymentStrategy
+from ..base.models import DeployContext, CommonParams
+from .models import SubprocessParams, ProcessInfo, PROCESS_TABLE_DEF
+from .deployer import LocalSubprocessDeployer
+
+
+class SubprocessStrategy(BaseDeploymentStrategy[ProcessInfo]):
+    """本地进程部署策略"""
+
+    def _create_default_deployer(self) -> Any:
+        return LocalSubprocessDeployer()
+
+    def _create_table_definition(self):
+        return PROCESS_TABLE_DEF
+
+    def _get_info_class(self) -> type:
+        return ProcessInfo
+
+    def _build_record_data(
+        self, deployment_id: str, version: str, **kwargs: Any
+    ) -> dict:
+        now = datetime.utcnow()
+        return {
+            "deployment_id": deployment_id,
+            "version": version,
+            "host": kwargs.get("host", "localhost"),
+            "port": kwargs.get("port"),
+            "url": kwargs.get("url"),
+            "pid": kwargs.get("pid"),
+            "whl_path": kwargs.get("whl_path"),
+            "package_name": kwargs.get("package_name"),
+            "venv_path": kwargs.get("venv_path"),
+            "created_at": now,
+            "updated_at": now,
+            "data": kwargs.get("data"),
+        }
+
+    def _build_deploy_context(self, record: Any, deployment: Any) -> DeployContext[SubprocessParams]:
+        if hasattr(record, "to_dict"):
+            data = record.to_dict()
+        else:
+            data = record
+        return DeployContext(
+            common=CommonParams(
+                deployment_id=data.get("deployment_id"),
+                host=data.get("host"),
+                port=data.get("port"),
+                url=data.get("url"),
+            ),
+            params=SubprocessParams(
+                whl_path=data.get("whl_path"),
+                package_name=data.get("package_name"),
+                venv_path=data.get("venv_path"),
+            ),
+            data=data.get("data"),
+        )
+
+    def _get_stop_kwargs(self, record: Any) -> dict:
+        if hasattr(record, "to_dict"):
+            data = record.to_dict()
+        else:
+            data = record
+        return {
+            "pid": data.get("pid"),
+            "venv_path": data.get("venv_path"),
+        }
+
+    def _get_status_kwargs(self, record: Any) -> dict:
+        if hasattr(record, "to_dict"):
+            data = record.to_dict()
+        else:
+            data = record
+        return {
+            "pid": data.get("pid"),
+        }
