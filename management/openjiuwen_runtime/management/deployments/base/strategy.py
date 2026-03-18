@@ -5,7 +5,7 @@ from typing import Any, Optional, Generic, TypeVar
 from datetime import datetime
 import logging
 
-from ...db.handler import DBHandler
+from openjiuwen_runtime.foundation.db.handler import DBHandler
 from .models import DeployContext, DeployResult
 from .deployer import Deployer
 from ...models.enums import DeploymentStatus

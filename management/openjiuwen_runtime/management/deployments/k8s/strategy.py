@@ -1,13 +1,12 @@
 """K8s 部署策略"""
 
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any
 
-from ..base.strategy import BaseDeploymentStrategy
-from ..base.models import DeployContext, CommonParams
-from .models import K8sInfo, K8sParams, K8S_TABLE_DEF
 from .deployer import K8sDeployer
-from ...db.handler import DBHandler
+from .models import K8sInfo, K8sParams, K8S_TABLE_DEF
+from ..base.models import DeployContext, CommonParams
+from ..base.strategy import BaseDeploymentStrategy
 
 
 class K8sStrategy(BaseDeploymentStrategy[K8sInfo]):
