@@ -15,6 +15,7 @@ from fastapi import Request, HTTPException
 from fastapi.responses import StreamingResponse
 
 from .base_app import BaseApp
+from .middleware import Middleware, MiddlewareContext
 from ..models.request import QueryRequest, ResetConversationRequest
 
 
@@ -59,6 +60,9 @@ class AgentApp(BaseApp):
         # 查询钩子
         self._query_hook: Optional[Callable] = None
 
+        # 中间件列表
+        self._middlewares: list = []
+
         # Agent 配置路径
         self.agent_config_path = agent_config_path
 
@@ -85,6 +89,38 @@ class AgentApp(BaseApp):
         self._query_hook = func
         return func
 
+    def add_middleware(self, middleware: Middleware) -> 'AgentApp':
+        """
+        添加中间件实例
+
+        参数:
+            middleware: 中间件实例
+
+        返回:
+            self，支持链式调用
+        """
+        self._middlewares.append(middleware)
+        return self
+
+    def middleware(self, middleware_class):
+        """
+        中间件装饰器
+
+        用法:
+            @app.middleware(MyMiddleware)
+            class MyMiddleware(Middleware):
+                pass
+
+        参数:
+            middleware_class: 中间件类
+
+        返回:
+            中间件实例
+        """
+        instance = middleware_class()
+        self._middlewares.append(instance)
+        return instance
+
     def _register_agent_routes(self):
         """注册 Agent 特定路由"""
 
@@ -105,10 +141,50 @@ class AgentApp(BaseApp):
             # 执行查询钩子
             async def generate():
                 if self._query_hook:
-                    # 调用查询钩子并迭代结果
-                    # 钩子应该是异步生成器函数
-                    async for msg, last in self._query_hook(messages, query_request):
-                        yield f"data: {json.dumps(msg)}\n\n"
+                    # 创建中间件上下文
+                    context = MiddlewareContext()
+                    processed_messages = messages
+                    error_occurred = False
+
+                    # 调用所有中间件的 before_query 方法
+                    for mw in self._middlewares:
+                        try:
+                            processed_messages = await mw.before_query(
+                                processed_messages, query_request, context
+                            )
+                        except Exception:
+                            pass
+
+                    try:
+                        # 调用查询钩子并迭代结果
+                        # 钩子应该是异步生成器函数
+                        async for msg, last in self._query_hook(processed_messages, query_request):
+                            # 对每个消息调用 before_response 方法
+                            processed_msg = msg
+                            for mw in self._middlewares:
+                                try:
+                                    processed_msg = await mw.before_response(
+                                        processed_messages, query_request, processed_msg, context
+                                    )
+                                except Exception:
+                                    pass
+                            yield f"data: {json.dumps(processed_msg)}\n\n"
+
+                        # 查询成功完成后调用 after_query 方法
+                        for mw in self._middlewares:
+                            try:
+                                await mw.after_query(processed_messages, query_request, context)
+                            except Exception:
+                                pass
+                    except Exception as e:
+                        error_occurred = True
+                        # 发生异常时调用 on_error 方法
+                        for mw in self._middlewares:
+                            try:
+                                await mw.on_error(processed_messages, query_request, e, context)
+                            except Exception:
+                                pass
+                        raise
 
             return StreamingResponse(
                 generate(),
