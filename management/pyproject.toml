@@ -26,12 +26,11 @@ dependencies = [
     # lint
     "ruff==0.9.10",
     # local dependency
-    "openjiuwen-runtime-foundation @ file://../foundation",
+    "openjiuwen-runtime-foundation @ file:///${PROJECT_ROOT}/../foundation",
 ]
 
 [tool.uv]
 default-groups = ['dev']
-pip = true
 
 [dependency-groups]
 dev = [
