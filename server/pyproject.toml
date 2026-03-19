@@ -13,8 +13,9 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "python-multipart>=0.0.6",
     # local dependencies
-    "openjiuwen-runtime-management @ file:///${PROJECT_ROOT}/../management",
-    "openjiuwen-runtime-foundation @ file:///${PROJECT_ROOT}/../foundation",
+    # "openjiuwen-runtime-management @ file:///${PROJECT_ROOT}/../management",
+    "openjiuwen-runtime-management==0.0.1",
+
 ]
 
 [tool.uv]

@@ -13,8 +13,8 @@ dependencies = [
     "fastapi>=0.100.0",
     "uvicorn>=0.23.0",
     # local dependencies
-    "openjiuwen-runtime-management @ file:///${PROJECT_ROOT}/../management",
-    "openjiuwen-runtime-foundation @ file:///${PROJECT_ROOT}/../foundation",
+    # "openjiuwen-runtime-management @ file:///${PROJECT_ROOT}/../management",
+    "openjiuwen-runtime-management==0.0.1",
 ]
 
 [tool.uv]
