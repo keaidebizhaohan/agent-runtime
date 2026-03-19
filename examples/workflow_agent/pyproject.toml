@@ -25,8 +25,7 @@ dev = [
 [[tool.uv.index]]
 url = "https://mirrors.aliyun.com/pypi/simple/"
 
-[tool.setuptools]
-packages = ["openjiuwen_runtime.examples.workflow_agent"]
-
-[tool.setuptools.package-dir]
-"openjiuwen_runtime.examples.workflow_agent" = "src"
+[tool.setuptools.packages.find]
+where = ["."]
+exclude = ["*.egg-info", "tests"]
+include = ["openjiuwen_runtime*"]

@@ -8,5 +8,6 @@ from .base_app import BaseApp
 from .agent_app import AgentApp
 from .plugin_app import PluginApp
 from .app_group import AppGroup
+from .middleware import Middleware, MiddlewareContext, LoggingMiddleware
 
-__all__ = ["BaseApp", "AgentApp", "PluginApp", "AppGroup"]
+__all__ = ["BaseApp", "AgentApp", "PluginApp", "AppGroup", "Middleware", "MiddlewareContext", "LoggingMiddleware"]

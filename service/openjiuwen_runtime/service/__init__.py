@@ -50,9 +50,11 @@ agent-studio 的 Agent 和 Plugin 运行时 SDK。
     group.run(port=8090)
 """
 
-from .core import BaseApp, AgentApp, PluginApp, AppGroup
+from .app import BaseApp, AgentApp, PluginApp, AppGroup
+from .app import Middleware, MiddlewareContext, LoggingMiddleware
 from .models import QueryRequest, ResetConversationRequest
 
-__all__ = ["AgentApp", "BaseApp", "PluginApp", "AppGroup", "QueryRequest", "ResetConversationRequest"]
+__all__ = ["AgentApp", "BaseApp", "PluginApp", "AppGroup", "QueryRequest", "ResetConversationRequest",
+           "Middleware", "MiddlewareContext", "LoggingMiddleware"]
 
 __version__ = "0.2.0"

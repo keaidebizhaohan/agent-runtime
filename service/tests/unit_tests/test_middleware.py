@@ -15,8 +15,7 @@ import logging
 from io import StringIO
 from typing import Dict, Any, List
 
-from .middleware import Middleware, MiddlewareContext, LoggingMiddleware
-from .agent_app import AgentApp
+from openjiuwen_runtime.service import AgentApp, Middleware, MiddlewareContext, LoggingMiddleware
 
 
 class TestMiddlewareContext(unittest.TestCase):
@@ -53,37 +52,37 @@ class OrderTrackingMiddleware(Middleware):
         self.call_order = call_order
 
     async def before_query(
-        self,
-        messages: List[Dict[str, Any]],
-        request: Any,
-        context: MiddlewareContext,
+            self,
+            messages: List[Dict[str, Any]],
+            request: Any,
+            context: MiddlewareContext,
     ) -> List[Dict[str, Any]]:
         self.call_order.append(f"{self.name}.before_query")
         return messages
 
     async def after_query(
-        self,
-        messages: List[Dict[str, Any]],
-        request: Any,
-        context: MiddlewareContext,
+            self,
+            messages: List[Dict[str, Any]],
+            request: Any,
+            context: MiddlewareContext,
     ) -> None:
         self.call_order.append(f"{self.name}.after_query")
 
     async def on_error(
-        self,
-        messages: List[Dict[str, Any]],
-        request: Any,
-        error: Exception,
-        context: MiddlewareContext,
+            self,
+            messages: List[Dict[str, Any]],
+            request: Any,
+            error: Exception,
+            context: MiddlewareContext,
     ) -> None:
         self.call_order.append(f"{self.name}.on_error")
 
     async def before_response(
-        self,
-        messages: List[Dict[str, Any]],
-        request: Any,
-        response: Any,
-        context: MiddlewareContext,
+            self,
+            messages: List[Dict[str, Any]],
+            request: Any,
+            response: Any,
+            context: MiddlewareContext,
     ) -> Any:
         self.call_order.append(f"{self.name}.before_response")
         return response
@@ -100,10 +99,10 @@ class ContextSharingMiddleware(Middleware):
         self.retrieved_value = None
 
     async def before_query(
-        self,
-        messages: List[Dict[str, Any]],
-        request: Any,
-        context: MiddlewareContext,
+            self,
+            messages: List[Dict[str, Any]],
+            request: Any,
+            context: MiddlewareContext,
     ) -> List[Dict[str, Any]]:
         if self.set_key:
             context.set(self.set_key, self.set_value)
