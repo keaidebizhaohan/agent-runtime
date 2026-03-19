@@ -118,12 +118,12 @@ async def deploy_agent(
 
             # 过滤内部实现细节，只返回用户需要的信息
             response = {
-                "deployment_id": result["deployment_id"],
-                "type": result["type"],
-                "name": result["name"],
-                "status": result["status"],
-                "url": result.get("url"),
-                "port": result.get("port"),
+                "deployment_id": result.deployment_id,
+                "type": result.deployment_type.value,
+                "name": result.name,
+                "status": result.deployment_status.value,
+                "url": result.url,
+                "port": result.data.get("port") if result.data else None,
             }
 
             return JSONResponse(
@@ -165,11 +165,11 @@ async def list_agents(
         filtered_deployments = []
         for dep in deployments:
             filtered_deployments.append({
-                "deployment_id": dep["deployment_id"],
-                "name": dep.get("name"),
-                "status": dep["status"].value if hasattr(dep["status"], "value") else str(dep["status"]),
-                "url": dep.get("url"),
-                "port": dep.get("port"),
+                "deployment_id": dep.deployment_id,
+                "name": dep.name,
+                "status": dep.deployment_status.value,
+                "url": dep.url,
+                "port": dep.data.get("port") if dep.data else None,
             })
 
         return {"deployments": filtered_deployments}
@@ -198,14 +198,14 @@ async def get_agent(request: Request, deployment_id: str):
             )
         # 过滤内部实现细节
         return {
-            "deployment_id": deployment["deployment_id"],
-            "name": deployment.get("name"),
-            "status": deployment["status"].value if hasattr(deployment["status"], "value") else str(deployment["status"]),
-            "url": deployment.get("url"),
-            "port": deployment.get("port"),
-            "type": deployment.get("type"),
-            "created_at": deployment.get("created_at"),
-            "updated_at": deployment.get("updated_at"),
+            "deployment_id": deployment.deployment_id,
+            "name": deployment.name,
+            "status": deployment.deployment_status.value,
+            "url": deployment.url,
+            "port": deployment.data.get("port") if deployment.data else None,
+            "type": deployment.deployment_type.value,
+            "created_at": deployment.created_at,
+            "updated_at": deployment.updated_at,
         }
     except HTTPException:
         raise
