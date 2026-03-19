@@ -26,7 +26,8 @@ dependencies = [
     # lint
     "ruff==0.9.10",
     # local dependency
-    "openjiuwen-runtime-foundation @ file:///${PROJECT_ROOT}/../foundation",
+    # "openjiuwen-runtime-foundation @ file:///${PROJECT_ROOT}/../foundation",
+    "openjiuwen-runtime-foundation==0.0.1",
 ]
 
 [tool.uv]
@@ -43,6 +44,7 @@ dev = [
 
 [[tool.uv.index]]
 url = "https://mirrors.aliyun.com/pypi/simple/"
+# url = "https://cn-north-4_a8fea7d0bff7453bab6394a0842d727c_047e5eaae5e442c4b9e79e3032d2d36e:=j1AK^h4uU@devrepo.devcloud.cn-north-4.huaweicloud.com/artgalaxy/api/pypi/cn-north-4_a8fea7d0bff7453bab6394a0842d727c_pypi_5_2/simple"
 
 [tool.setuptools.packages.find]
 where = ["."]

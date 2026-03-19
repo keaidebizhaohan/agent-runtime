@@ -13,7 +13,7 @@ from typing import AsyncIterator, Tuple
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from src import AgentApp, AppGroup
+from openjiuwen_runtime.service import AgentApp, AppGroup
 
 
 class MockAgent:
@@ -53,16 +53,18 @@ customer_app = AgentApp(
     version="1.0.0",
 )
 
+
 @customer_app.init
 async def init_customer():
     customer_app.agent = MockAgent("客服")
     print("[OK] 客服 Agent 初始化完成")
 
+
 @customer_app.query
 async def query_customer(msgs, request):
     async for msg, last in customer_app.agent.stream(
-        messages=msgs,
-        conversation_id=request.conversation_id,
+            messages=msgs,
+            conversation_id=request.conversation_id,
     ):
         yield msg, last
 
@@ -74,16 +76,18 @@ assistant_app = AgentApp(
     version="1.0.0",
 )
 
+
 @assistant_app.init
 async def init_assistant():
     assistant_app.agent = MockAgent("助手")
     print("[OK] 助手 Agent 初始化完成")
 
+
 @assistant_app.query
 async def query_assistant(msgs, request):
     async for msg, last in assistant_app.agent.stream(
-        messages=msgs,
-        conversation_id=request.conversation_id,
+            messages=msgs,
+            conversation_id=request.conversation_id,
     ):
         yield msg, last
 
@@ -97,7 +101,6 @@ group = AppGroup(
 
 group.mount("/customer", customer_app)
 group.mount("/assistant", assistant_app)
-
 
 if __name__ == "__main__":
     # 支持 --host 和 --port 命令行参数

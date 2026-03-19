@@ -7,9 +7,8 @@ It provides calculator tools: add (addition) and multiply (multiplication).
 Reference: OPENJIUWEN_RUNTIME_DESIGN_V2.md Section 3.3
 """
 
-from src.core import PluginApp
+from openjiuwen_runtime.service import PluginApp
 from typing import Dict, Any
-
 
 # Create the PluginApp
 app = PluginApp(
@@ -127,9 +126,12 @@ if __name__ == "__main__":
     print()
     print("Example usage:")
     print('  curl -X POST http://127.0.0.1:8092/tools/add -H "Content-Type: application/json" -d \'{"a": 5, "b": 3}\'')
-    print('  curl -X POST http://127.0.0.1:8092/tools/multiply -H "Content-Type: application/json" -d \'{"a": 4, "b": 7}\'')
-    print('  curl -X POST http://127.0.0.1:8092/tools/subtract -H "Content-Type: application/json" -d \'{"a": 10, "b": 3}\'')
-    print('  curl -X POST http://127.0.0.1:8092/tools/divide -H "Content-Type: application/json" -d \'{"a": 20, "b": 4}\'')
+    print(
+        '  curl -X POST http://127.0.0.1:8092/tools/multiply -H "Content-Type: application/json" -d \'{"a": 4, "b": 7}\'')
+    print(
+        '  curl -X POST http://127.0.0.1:8092/tools/subtract -H "Content-Type: application/json" -d \'{"a": 10, "b": 3}\'')
+    print(
+        '  curl -X POST http://127.0.0.1:8092/tools/divide -H "Content-Type: application/json" -d \'{"a": 20, "b": 4}\'')
     print()
     print("API documentation: http://127.0.0.1:8092/docs")
     print()

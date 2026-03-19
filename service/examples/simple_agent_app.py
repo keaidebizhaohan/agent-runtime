@@ -8,7 +8,7 @@ It creates a simple agent that echoes messages back.
 import asyncio
 from typing import AsyncIterator, Tuple
 
-from src import AgentApp
+from openjiuwen_runtime.service import AgentApp
 
 
 class MockAgent:
