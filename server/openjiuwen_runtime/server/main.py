@@ -3,6 +3,7 @@
 FastAPI 服务器，提供 Agent 部署管理 REST API（支持租户隔离）
 """
 
+import os
 import asyncio
 import json
 import logging
@@ -16,9 +17,10 @@ from fastapi.responses import JSONResponse
 from openjiuwen_runtime.management.manager import DeploymentManager
 from openjiuwen_runtime.management.models.enums import DeploymentType, DeploymentStatus
 from openjiuwen_runtime.foundation.db.sqlite_handler import SQLiteHandler
+from openjiuwen_runtime.foundation.db.mysql_handler import MySQLHandler
 from openjiuwen_runtime.foundation.packaging import package_python_to_whl
-
-
+from openjiuwen_runtime.foundation.port_utils import allocate_port
+from openjiuwen_runtime.foundation.port_utils import is_port_available
 from .config import settings
 from .converter.agent_converter import AgentConverter
 from .middleware.tenant import TenantContextMiddleware, get_tenant_context
@@ -40,8 +42,16 @@ app = FastAPI(
 # 添加租户中间件（临时禁用租户验证，测试用）
 app.add_middleware(TenantContextMiddleware, require_tenant=False)
 
-# 初始化组件
-db_handler = SQLiteHandler('deployments.db')
+# 初始化数据库组件（默认是sqlite）
+DB_TYPE = os.getenv("DB_TYPE", "sqlite").lower()
+logger.info(f"Using database: {DB_TYPE}")
+if DB_TYPE == "sqlite":
+    db_handler = SQLiteHandler("deployments.db")
+elif DB_TYPE == "mysql":
+    db_handler = MySQLHandler()
+else:
+    raise ValueError(f"Unsupported DB_TYPE: {DB_TYPE}. Use 'sqlite' or 'mysql'.")
+
 manager = DeploymentManager(db_handler)
 agent_converter = AgentConverter()
 
@@ -72,7 +82,7 @@ async def deploy_agent(
     file: UploadFile,
     name: str = Query(..., description="部署名称（=包名）"),
     deployer_type: str = Query(default="local_subprocess", description="部署器类型"),
-    port: int = Query(default=8090, description="服务端口"),
+    port: int | None = Query(default=None, description="服务端口，不填则自动分配"),
 ):
     """
     部署 Agent（JSON 配置，低码方式）
@@ -109,6 +119,19 @@ async def deploy_agent(
 
             whl_path = await package_python_to_whl(source_dir, package_name=name)
 
+            logger.info(f"deployer_type: {deployer_type}")
+            if deployer_type == "local_subprocess":
+                if port is None:
+                    port = allocate_port()
+                    logger.info(f"Auto-allocated port: {port}")
+                elif not is_port_available(port):
+                    logger.error(f"Port {port} is already in use")
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"Port {port} is occupied. Please use another port or leave it blank for auto-allocation."
+                    )
+                logger.info(f"Port: {port}")
+
             # 4. 调用 Manager SDK 部署（传入租户信息）
             result = await manager.deploy_agent(
                 name=name,
@@ -127,7 +150,6 @@ async def deploy_agent(
                 "name": result.name,
                 "status": result.deployment_status.value,
                 "url": result.url,
-                "port": result.data.get("port") if result.data else None,
             }
 
             return JSONResponse(

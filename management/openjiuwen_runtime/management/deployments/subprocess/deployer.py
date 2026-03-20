@@ -175,7 +175,8 @@ class LocalSubprocessDeployer(Deployer[SubprocessParams]):
                 logger.error(f"Process exited for {deployment_id}: {error_msg}")
                 raise RuntimeError(f"Process exited: {error_msg}")
 
-            url=f"http://{str(ctx.host)}:{str(ctx.port)}/"
+            ip=os.getenv("IP", "localhost")
+            url=f"http://{ip}:{str(ctx.port)}/"
             logger.info(f"Deployment {deployment_id} succeeded, PID: {process.pid}, URL: {url}")
 
             return DeployResult(
