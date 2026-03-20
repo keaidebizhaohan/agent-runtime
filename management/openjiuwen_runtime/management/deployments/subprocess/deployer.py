@@ -144,7 +144,7 @@ class LocalSubprocessDeployer(Deployer[SubprocessParams]):
                 str(python_executable),
                 "-m",
                 package_name,
-                "--host", str(ctx.host),
+                "--host", "0.0.0.0",
                 "--port", str(ctx.port)
             ]
             logger.debug(f"Command: {' '.join(cmd)}")
