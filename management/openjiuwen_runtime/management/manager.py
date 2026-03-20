@@ -122,6 +122,7 @@ class DeploymentManager:
     ) -> DeploymentInfo:
         """部署Agent"""
         logger.info(f"Deploying agent: name={name}, version={version}, mode={mode}, user_id={user_id}, space_id={space_id}")
+        kwargs["package_name"] = name
         return await self._deploy(
             deployment_type=DeploymentType.AGENT,
             name=name,

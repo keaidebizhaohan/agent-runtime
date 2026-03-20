@@ -137,11 +137,14 @@ class LocalSubprocessDeployer(Deployer[SubprocessParams]):
             python_executable = self.venv_manager.get_python_executable(deployment_id)
 
             # 4. 构建启动命令: python -m name --host --port
+            if not package_name:
+                raise RuntimeError("package_name is required for subprocess deployment")
+
             cmd = [
                 str(python_executable),
                 "-m",
                 package_name,
-                "--host", ctx.host,
+                "--host", str(ctx.host),
                 "--port", str(ctx.port)
             ]
             logger.debug(f"Command: {' '.join(cmd)}")
@@ -151,10 +154,14 @@ class LocalSubprocessDeployer(Deployer[SubprocessParams]):
             if sys.platform == "win32":
                 creation_flags = subprocess.CREATE_NEW_PROCESS_GROUP
 
+            env = os.environ.copy()
+            env["VIRTUAL_ENV"] = str(venv_path)
+
             process = subprocess.Popen(
                 cmd,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 creationflags=creation_flags,
             )
 
@@ -163,19 +170,19 @@ class LocalSubprocessDeployer(Deployer[SubprocessParams]):
 
             if process.poll() is not None:
                 # 进程已经退出，读取错误信息
-                stderr = process.stderr.read()
-                stdout = process.stdout.read()
-                error_msg = stderr or stdout or "Unknown error"
+                stdout, stderr = process.communicate()
+                error_msg = stderr.decode('utf-8', errors='ignore') or stdout.decode('utf-8', errors='ignore') or "Unknown error"
                 logger.error(f"Process exited for {deployment_id}: {error_msg}")
                 raise RuntimeError(f"Process exited: {error_msg}")
 
-            logger.info(f"Deployment {deployment_id} succeeded, PID: {process.pid}")
+            url=f"http://{str(ctx.host)}:{str(ctx.port)}/"
+            logger.info(f"Deployment {deployment_id} succeeded, PID: {process.pid}, URL: {url}")
 
             return DeployResult(
                 success=True,
                 deployment_id=deployment_id,
                 message="Deployment started successfully",
-                url=ctx.url,
+                url=url,
             )
 
         except Exception as e:

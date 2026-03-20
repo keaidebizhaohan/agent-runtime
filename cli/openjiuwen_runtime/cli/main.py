@@ -18,7 +18,7 @@ from openjiuwen_runtime.foundation.db.sqlite_handler import SQLiteHandler
 
 # 配置日志输出
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S'
 )

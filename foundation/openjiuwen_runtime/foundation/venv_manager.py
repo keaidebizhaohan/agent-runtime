@@ -4,6 +4,7 @@ import logging
 import shutil
 import subprocess
 import sys
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -98,6 +99,7 @@ class VirtualEnvironmentManager:
             logger.error(f"Failed to create virtual environment: {e.stderr}")
             raise RuntimeError(f"Failed to create venv: {e}")
 
+
     def get_python_executable(self, deployment_id: str) -> Path:
         """
         获取虚拟环境中的Python可执行文件路径
@@ -146,12 +148,18 @@ class VirtualEnvironmentManager:
 
         logger.info(f"Installing WHL package: {whl_path} into {deployment_id}")
 
+        cmd = [
+            str(python_executable), "-m", "pip", "install",
+            whl_path
+        ]
+        logger.debug(f"Command: {' '.join(cmd)}")
+
         try:
+            env = os.environ.copy()
+            env["VIRTUAL_ENV"] = str(self.venvs_root / deployment_id)
             result = subprocess.run(
-                [
-                    str(python_executable), "-m", "pip", "install",
-                    whl_path
-                ],
+                cmd,
+                env=env,
                 capture_output=True,
                 text=True
             )

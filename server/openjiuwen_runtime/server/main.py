@@ -16,6 +16,8 @@ from fastapi.responses import JSONResponse
 from openjiuwen_runtime.management.manager import DeploymentManager
 from openjiuwen_runtime.management.models.enums import DeploymentType, DeploymentStatus
 from openjiuwen_runtime.foundation.db.sqlite_handler import SQLiteHandler
+from openjiuwen_runtime.foundation.packaging import package_python_to_whl
+
 
 from .config import settings
 from .converter.agent_converter import AgentConverter
@@ -23,7 +25,7 @@ from .middleware.tenant import TenantContextMiddleware, get_tenant_context
 
 # 配置日志
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
@@ -98,12 +100,14 @@ async def deploy_agent(
 
         # 3. 使用 AgentConverter 转换为 Python 文件
         with tempfile.TemporaryDirectory() as temp_dir:
-            python_file_path = await agent_converter.convert_to_python(
+            source_dir = await agent_converter.convert_to_pythonDir(
                 config_json=config_json,
                 name=name,
                 output_dir=temp_dir,
             )
-            logger.info(f"Generated Python file: {python_file_path}")
+            logger.info(f"Generated source directory: {source_dir}")
+
+            whl_path = await package_python_to_whl(source_dir, package_name=name)
 
             # 4. 调用 Manager SDK 部署（传入租户信息）
             result = await manager.deploy_agent(
@@ -111,7 +115,7 @@ async def deploy_agent(
                 version="1.0.0",
                 user_id=user_id,  # 注入租户信息
                 space_id=space_id,  # 注入租户信息
-                python_file_path=python_file_path,
+                whl_path=whl_path,
                 deployer_type=deployer_type,
                 port=port,
             )
