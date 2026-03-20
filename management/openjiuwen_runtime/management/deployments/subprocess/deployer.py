@@ -225,11 +225,19 @@ class LocalSubprocessDeployer(Deployer[SubprocessParams]):
                 shutil.rmtree(venv_path, ignore_errors=True)
 
             logger.info(f"Subprocess stopped: deployment_id={deployment_id}")
-            return DeployResult(success=True, message="Deployment stopped successfully")
+            return DeployResult(
+                success=True,
+                deployment_id=deployment_id,
+                message="Deployment stopped successfully"
+            )
 
         except Exception as e:
             logger.error(f"Subprocess stop failed: deployment_id={deployment_id}, error={str(e)}")
-            return DeployResult(success=False, message=f"Stop failed: {str(e)}")
+            return DeployResult(
+                success=False,
+                deployment_id=deployment_id,
+                message=f"Stop failed: {str(e)}"
+            )
 
     async def get_status(self, deployment_id: str, **kwargs) -> DeploymentStatus:
         """获取部署状态
