@@ -1,0 +1,79 @@
+{
+  "version": "0.1.1",
+  "agent": {
+    "agent_id": "ab7b4536-047b-42c7-8f14-3910edf2339b",
+    "agent_version": "draft",
+    "latest_publish_time": null,
+    "latest_publish_version": null,
+    "primary_id": 1174,
+    "space_id": "03852674",
+    "agent_name": "test",
+    "description": "测试",
+    "agent_type": "react",
+    "icon": "🤖",
+    "edit_mode": "manual",
+    "prompt_template_name": "",
+    "auto_generated_prompt": "",
+    "opening_remarks": "您好！我是您的智能助手，很高兴为您服务。请问有什么可以帮助您的吗？",
+    "default_response": null,
+    "configs": {
+      "retrieval_config": {
+        "topk": 5,
+        "use_sync": false,
+        "use_agent": false,
+        "retrieval_type": 2,
+        "score_threshold": 0.5
+      }
+    },
+    "plugins": [],
+    "workflows": [],
+    "model_id": 147,
+    "agent_model_config": {
+      "top_p": 0.9,
+      "timeout": 300,
+      "temperature": 0.7
+    },
+    "prompt_template": [],
+    "constraint": {
+      "max_iteration": 5,
+      "reserved_max_chat_rounds": 10
+    },
+    "prompt_tuning": {},
+    "triggers": [],
+    "knowledge": [],
+    "memory": {
+      "max_tokens": 1000,
+      "memory_base": null,
+      "variable_config": null,
+      "longterm_memory_config": false
+    },
+    "create_time": 1772260500738,
+    "update_time": 1772704484102
+  },
+  "dependencies": {
+    "workflows": [],
+    "plugins": [],
+    "knowledge_bases": [],
+    "prompt_templates": []
+  },
+  "metadata": {
+    "export_time": "2026-03-05T09:54:47.966503+00:00",
+    "export_by": "ldstyle8",
+    "agent_studio_version": "0.1.1"
+  },
+  "model_references": {
+    "siliconflow/Qwen/Qwen3-8B": {
+      "provider": "siliconflow",
+      "model_type": "Qwen/Qwen3-8B",
+      "name": "Qwen/Qwen3-8B",
+      "base_url": "https://api.siliconflow.cn/v1",
+      "api_key": "sk-qlkairmltpvsbmtduezxulxarypnwmijgvkpnuinoqmmwgjc",
+      "timeout": 300,
+      "parameters": {
+        "top_p": 0.9,
+        "max_tokens": 5000,
+        "temperature": 0.7
+      }
+    }
+  }
+}
