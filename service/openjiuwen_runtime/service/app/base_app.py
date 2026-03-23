@@ -7,12 +7,9 @@ BaseApp - AgentApp 和 PluginApp 的基类
 - 健康检查端点 (/health)
 - 运行方法 (uvicorn 服务器)
 """
-
 from typing import Callable, Optional
 from fastapi import FastAPI
 import uvicorn
-import sys
-import argparse
 
 
 class BaseApp:
@@ -104,38 +101,10 @@ class BaseApp:
         """
         运行应用
 
-        支持命令行参数:
-            python app.py --host 0.0.0.0 --port 8090
-
         参数:
             host: 绑定主机 (默认: 0.0.0.0)
             port: 绑定端口 (默认: 8090)
             **kwargs: 传递给 uvicorn.run() 的额外参数
         """
-        # 解析命令行参数（仅当存在命令行参数时）
-        run_host = host
-        run_port = port
-
-        if len(sys.argv) > 1:
-            parser = argparse.ArgumentParser(
-                description=f"Run {self.app_name}",
-                allow_abbrev=False,
-            )
-            parser.add_argument(
-                "--host",
-                type=str,
-                default=host,
-                help=f"Host to bind to (default: {host})",
-            )
-            parser.add_argument(
-                "--port",
-                type=int,
-                default=port,
-                help=f"Port to bind to (default: {port})",
-            )
-            args = parser.parse_args()
-            run_host = args.host
-            run_port = args.port
-
-        print(f"Starting {self.app_name} v{self.version} on http://{run_host}:{run_port}")
-        uvicorn.run(self.app, host=run_host, port=run_port, **kwargs)
+        print(f"Starting {self.app_name} v{self.version} on http://{host}:{port}")
+        uvicorn.run(self.app, host=host, port=port, **kwargs)

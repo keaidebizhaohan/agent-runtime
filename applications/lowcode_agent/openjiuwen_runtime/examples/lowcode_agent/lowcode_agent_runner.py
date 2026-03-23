@@ -10,6 +10,7 @@ Lowcode Agent App
     PYTHONPATH=. python lowcode_agent_runner.py --port 8091
 """
 
+import argparse
 import json
 from pathlib import Path
 from typing import AsyncIterator, Tuple
@@ -20,11 +21,17 @@ from openjiuwen.core.single_agent.agents.react_agent import ReActAgent
 from openjiuwen_studio.lowcode import AgentCompiler
 from openjiuwen_studio.lowcode.schemas import ModelOverride
 
-EXPORT_FILE_PATH = Path(__file__).resolve().parents[0] / "test-export-simpleAgent.json"
+FILE_PATH = ''
+
+app = AgentApp(
+    app_name="LowcodeAgent",
+    app_description="A lowcode agent loaded from exported JSON config",
+    version="0.1.0",
+)
 
 
-def _load_export_data() -> dict:
-    with open(EXPORT_FILE_PATH, "r", encoding="utf-8") as f:
+def _load_export_data(file_path) -> dict:
+    with open(file_path, "r", encoding="utf-8") as f:
         return json.load(f)
 
 
@@ -42,19 +49,11 @@ def _get_model_overrides() -> dict:
     }
 
 
-app = AgentApp(
-    app_name="LowcodeAgent",
-    app_description="A lowcode agent loaded from exported JSON config",
-    version="0.1.0",
-)
-
-
 @app.init
 async def init():
     """初始化并加载 Agent"""
-    export_data = _load_export_data()
+    export_data = _load_export_data(FILE_PATH)
     model_overrides = _get_model_overrides()
-
     compiler = AgentCompiler()
 
     result = await compiler.compile_for_runtime(
@@ -69,6 +68,7 @@ async def init():
     app.agent = agent
 
     print(f"[OK] Agent 加载成功! Type: {type(app.agent).__name__}")
+    print(f"[INFO] 使用配置文件: {FILE_PATH}")
 
 
 @app.query
@@ -87,9 +87,9 @@ async def query(msgs, request) -> AsyncIterator[Tuple[dict, bool]]:
     inputs = {"query": last_user_msg}
 
     async for chunk in Runner.run_agent_streaming(
-        agent=app.agent,
-        inputs=inputs,
-        session=request.conversation_id
+            agent=app.agent,
+            inputs=inputs,
+            session=request.conversation_id
     ):
         if chunk:
             if hasattr(chunk, 'model_dump'):
@@ -110,10 +110,38 @@ async def shutdown():
 
 
 if __name__ == "__main__":
-    print("""
-Starting LowcodeAgent...
-Usage: python lowcode_agent_runner.py [--host HOST] [--port PORT]
-Example: curl -X POST http://127.0.0.1:8091/query -H 'Content-Type: application/json' \
-  -d '{"messages": [{"role": "user", "content": "你好"}], "conversation_id": "test-123"}'
-    """)
-    app.run()
+    import sys
+    parser = argparse.ArgumentParser(
+        description="Lowcode Agent Runner - 从导出的 JSON 配置加载并运行 Agent"
+    )
+    parser.add_argument(
+        "--file", "-f",
+        type=str,
+        required=True,
+        help="导出的 Agent JSON 配置文件路径 (必需)"
+    )
+    parser.add_argument(
+        "--host",
+        type=str,
+        default="0.0.0.0",
+        help="监听地址 (默认: 0.0.0.0)"
+    )
+    parser.add_argument(
+        "--port", "-p",
+        type=int,
+        default=8090,
+        help="监听端口 (默认: 8090)"
+    )
+
+    args = parser.parse_args()
+
+    # 设置导出文件路径
+    file_path = Path(args.file).resolve()
+    if not file_path.exists():
+        print(f"[ERROR] 配置文件不存在: {file_path}")
+        exit(1)
+
+    # 更新全局变量
+    FILE_PATH = str(file_path)
+
+    app.run(host=args.host, port=args.port)

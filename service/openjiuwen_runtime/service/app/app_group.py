@@ -11,8 +11,6 @@ AppGroup - 多应用容器类
 from typing import Dict
 from fastapi import FastAPI
 import uvicorn
-import sys
-import argparse
 
 from .base_app import BaseApp
 from .agent_app import AgentApp
@@ -192,39 +190,11 @@ class AppGroup:
         """
         运行所有挂载应用。
 
-        支持命令行参数:
-            python group_app.py --host 0.0.0.0 --port 8090
-
         参数:
             host: 绑定主机 (默认: 0.0.0.0)
             port: 绑定端口 (默认: 8090)
             **kwargs: 传递给 uvicorn.run() 的额外参数
         """
-        # 解析命令行参数
-        run_host = host
-        run_port = port
-
-        if len(sys.argv) > 1:
-            parser = argparse.ArgumentParser(
-                description=f"运行 {self.group_name}",
-                allow_abbrev=False,
-            )
-            parser.add_argument(
-                "--host",
-                type=str,
-                default=host,
-                help=f"绑定主机 (默认: {host})",
-            )
-            parser.add_argument(
-                "--port",
-                type=int,
-                default=port,
-                help=f"绑定端口 (默认: {port})",
-            )
-            args = parser.parse_args()
-            run_host = args.host
-            run_port = args.port
-
         # 注册路由和生命周期事件 (只执行一次)
         if not self._routes_registered:
             self._register_routes()
@@ -234,7 +204,7 @@ class AppGroup:
         # 打印启动信息
         print(f"\n{'='*60}")
         print(f"启动 {self.group_name} v{self.version}")
-        print(f"服务地址: http://{run_host}:{run_port}")
+        print(f"服务地址: http://{host}:{port}")
         print(f"{'='*60}")
         print(f"\n已挂载应用:")
         for prefix, app in self._mounted_apps.items():
@@ -247,7 +217,7 @@ class AppGroup:
             print(f"  GET  {prefix}/health        - {prefix.strip('/')} 健康检查")
             if isinstance(app, AgentApp):
                 print(f"  POST {prefix}/query         - {prefix.strip('/')} 查询")
-        print(f"\nAPI 文档: http://{run_host}:{run_port}/docs")
+        print(f"\nAPI 文档: http://{host}:{port}/docs")
         print(f"{'='*60}\n")
 
-        uvicorn.run(self.app, host=run_host, port=run_port, **kwargs)
+        uvicorn.run(self.app, host=host, port=port, **kwargs)
