@@ -14,7 +14,7 @@ import json
 from pathlib import Path
 from typing import AsyncIterator, Tuple
 
-from openjiuwen_runtime.service import AgentApp
+from openjiuwen_runtime.service.app.agent_app import AgentApp
 from openjiuwen.core.runner import Runner
 from openjiuwen.core.single_agent.agents.react_agent import ReActAgent
 from openjiuwen_studio.lowcode import AgentCompiler
