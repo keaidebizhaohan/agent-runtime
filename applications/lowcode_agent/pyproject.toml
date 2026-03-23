@@ -3,17 +3,21 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "openjiuwen-runtime-applications-lowcode-agent"
+name = "lowcode-agent-runner"
 version = "0.1.0"
-description = "OpenJiuwen Runtime"
+description = "Lowcode Agent Runner - 从导出的 JSON 配置加载并运行 Agent"
 requires-python = ">=3.11.4"
 dependencies = [
     "openjiuwen[chromadb,obs]==0.1.8",
     "openjiuwen_studio @ git+https://gitcode.com/openJiuwen/agent-studio.git@feature/runtime#subdirectory=backend",
+    "openjiuwen-runtime-service @ git+https://gitcode.com/openJiuwen/agent-runtime.git@develop#subdirectory=service",
     "fastapi>=0.104.0",
     "uvicorn[standard]>=0.24.0",
     "pydantic>=2.5.0",
 ]
+
+[project.scripts]
+lowcode-agent-runner = "openjiuwen_runtime.examples.lowcode_agent.__main__:main"
 
 [tool.uv]
 default-groups = ['dev']

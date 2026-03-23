@@ -7,12 +7,11 @@ Lowcode Agent App
 提供 HTTP 服务接口。
 
 运行方式:
-    PYTHONPATH=. python lowcode_agent_runner.py --port 8091
+    python -m openjiuwen_runtime.examples.lowcode_agent --file config.json --port 8091
+    lowcode-agent-runner --file config.json --port 8091
 """
 
-import argparse
 import json
-from pathlib import Path
 from typing import AsyncIterator, Tuple
 
 from openjiuwen_runtime.service.app.agent_app import AgentApp
@@ -107,41 +106,3 @@ async def shutdown():
     """清理资源"""
     if app.agent:
         print("[OK] Agent 资源已清理")
-
-
-if __name__ == "__main__":
-    import sys
-    parser = argparse.ArgumentParser(
-        description="Lowcode Agent Runner - 从导出的 JSON 配置加载并运行 Agent"
-    )
-    parser.add_argument(
-        "--file", "-f",
-        type=str,
-        required=True,
-        help="导出的 Agent JSON 配置文件路径 (必需)"
-    )
-    parser.add_argument(
-        "--host",
-        type=str,
-        default="0.0.0.0",
-        help="监听地址 (默认: 0.0.0.0)"
-    )
-    parser.add_argument(
-        "--port", "-p",
-        type=int,
-        default=8090,
-        help="监听端口 (默认: 8090)"
-    )
-
-    args = parser.parse_args()
-
-    # 设置导出文件路径
-    file_path = Path(args.file).resolve()
-    if not file_path.exists():
-        print(f"[ERROR] 配置文件不存在: {file_path}")
-        exit(1)
-
-    # 更新全局变量
-    FILE_PATH = str(file_path)
-
-    app.run(host=args.host, port=args.port)
