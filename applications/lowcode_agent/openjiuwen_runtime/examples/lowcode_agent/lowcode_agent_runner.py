@@ -35,7 +35,7 @@ def _get_model_overrides() -> dict:
             model_type="Qwen/Qwen3-8B",
             name="Qwen/Qwen3-8B",
             base_url="https://api.siliconflow.cn/v1",
-            api_key="sk-xxx",
+            api_key="sk-qlkairmltpvsbmtduezxulxarypnwmijgvkpnuinoqmmwgjc",
             timeout=300,
             parameters={"top_p": 0.9, "temperature": 0.7, "max_tokens": 5000},
         )
@@ -92,7 +92,12 @@ async def query(msgs, request) -> AsyncIterator[Tuple[dict, bool]]:
         session=request.conversation_id
     ):
         if chunk:
-            yield {"type": "text", "content": chunk}, False
+            if hasattr(chunk, 'model_dump'):
+                yield chunk.model_dump(), False
+            elif hasattr(chunk, 'payload') and hasattr(chunk, 'type'):
+                yield {"type": chunk.type, "index": getattr(chunk, 'index', 0), "payload": chunk.payload}, False
+            else:
+                yield {"type": "text", "content": str(chunk)}, False
 
     yield {"type": "text", "content": ""}, True
 
