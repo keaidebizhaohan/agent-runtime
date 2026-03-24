@@ -14,7 +14,7 @@ from typing import Dict, Any, Optional
 from fastapi import FastAPI, HTTPException, UploadFile, Query, status, Request
 from fastapi.responses import JSONResponse
 
-from openjiuwen_runtime.management.manager import DeploymentManager
+from openjiuwen_runtime.management.manager import DeploymentManager, DeployMode
 from openjiuwen_runtime.management.models.enums import DeploymentType, DeploymentStatus
 from openjiuwen_runtime.foundation.db.sqlite_handler import SQLiteHandler
 from openjiuwen_runtime.foundation.db.mysql_handler import MySQLHandler
@@ -81,7 +81,7 @@ async def deploy_agent(
     request: Request,
     file: UploadFile,
     name: str = Query(..., description="部署名称（=包名）"),
-    deployer_type: str = Query(default="local_subprocess", description="部署器类型"),
+    deployer_type: str = Query(default="subprocess", description="部署器类型"),
     port: int | None = Query(default=None, description="服务端口，不填则自动分配"),
 ):
     """
@@ -96,19 +96,19 @@ async def deploy_agent(
     user_id, space_id = get_tenant_context(request)
     logger.info(f"Received agent deploy request: user_id={user_id}, space_id={space_id}, name={name}")
 
-    # 1. 保存上传的 JSON 文件到临时目录
+    # 保存上传的 JSON 文件到临时目录
     content = await file.read()
     with tempfile.NamedTemporaryFile(mode='wb', suffix='.json', delete=False) as tmp_file:
         tmp_file.write(content)
         json_file_path = tmp_file.name
 
     try:
-        # 2. 读取 JSON 配置
+        # 读取 JSON 配置
         with open(json_file_path, 'r', encoding='utf-8') as f:
             config_json = json.load(f)
         logger.info(f"Loaded JSON config: {config_json}")
 
-        # 3. 使用 AgentConverter 转换为 Python 文件
+        # 使用 AgentConverter 转换为 Python 文件
         with tempfile.TemporaryDirectory() as temp_dir:
             source_dir = await agent_converter.convert_to_pythonDir(
                 config_json=config_json,
@@ -119,7 +119,17 @@ async def deploy_agent(
 
             whl_path = await package_python_to_whl(source_dir, package_name=name)
 
-            logger.info(f"deployer_type: {deployer_type}")
+            # 转换 deployer_type 为 DeployMode
+            deployer_type_map = {
+                "subprocess": DeployMode.SUBPROCESS,
+                "docker": DeployMode.DOCKER,
+                "k8s": DeployMode.K8S,
+            }
+
+            mode = deployer_type_map.get(deployer_type, DeployMode.SUBPROCESS)
+            logger.info(f"deployer_type: {deployer_type}, mode: {mode}")
+
+            # 端口分配和检查
             if deployer_type == "local_subprocess":
                 if port is None:
                     port = allocate_port()
@@ -132,14 +142,14 @@ async def deploy_agent(
                     )
                 logger.info(f"Port: {port}")
 
-            # 4. 调用 Manager SDK 部署（传入租户信息）
+            # 调用 Manager SDK 部署（传入租户信息）
             result = await manager.deploy_agent(
                 name=name,
                 version="1.0.0",
+                mode=mode,
                 user_id=user_id,  # 注入租户信息
                 space_id=space_id,  # 注入租户信息
                 whl_path=whl_path,
-                deployer_type=deployer_type,
                 port=port,
             )
 
