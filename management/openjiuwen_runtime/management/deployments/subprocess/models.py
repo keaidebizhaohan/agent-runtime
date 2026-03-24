@@ -13,6 +13,7 @@ from openjiuwen_runtime.foundation.db.table_def import TableDefinition, ColumnDe
 class SubprocessParams:
     """进程专用参数"""
     whl_path: Optional[str] = None
+    ir_path: Optional[str] = None
     package_name: Optional[str] = None
     venv_path: Optional[str] = None
 
@@ -27,6 +28,7 @@ class ProcessInfo(BaseModel):
     url: Optional[str] = None
     pid: Optional[int] = None
     whl_path: Optional[str] = None
+    ir_path: Optional[str] = None
     package_name: Optional[str] = None
     venv_path: Optional[str] = None
     created_at: Optional[datetime] = None
@@ -46,6 +48,7 @@ class ProcessCreate(BaseModel):
     url: Optional[str] = Field(None, description="服务URL")
     pid: Optional[int] = Field(None, description="进程PID")
     whl_path: Optional[str] = Field(None, description="WHL包路径")
+    ir_path: Optional[str] = Field(None, description="IR文件路径")
     package_name: Optional[str] = Field(None, description="包名称")
     venv_path: Optional[str] = Field(None, description="虚拟环境路径")
     data: Optional[dict[str, Any]] = Field(None, description="扩展数据")
@@ -62,6 +65,7 @@ PROCESS_TABLE_DEF = TableDefinition(
         ColumnDefinition("url", "string", length=512, nullable=True),
         ColumnDefinition("pid", "integer", nullable=True),
         ColumnDefinition("whl_path", "string", length=512, nullable=True),
+        ColumnDefinition("ir_path", "string", length=512, nullable=True),
         ColumnDefinition("package_name", "string", length=255, nullable=True),
         ColumnDefinition("venv_path", "string", length=512, nullable=True),
         ColumnDefinition("created_at", "datetime", nullable=False),

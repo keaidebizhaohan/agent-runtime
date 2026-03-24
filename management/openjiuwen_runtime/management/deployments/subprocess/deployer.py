@@ -120,6 +120,7 @@ class LocalSubprocessDeployer(Deployer[SubprocessParams]):
         try:
             subprocess_params = ctx.params or SubprocessParams()
             whl_path = subprocess_params.whl_path
+            ir_path = subprocess_params.ir_path
             package_name = subprocess_params.package_name
             # venv_path = subprocess_params.venv_path or os.path.join(
             #     self.venv_base_path, ctx.deployment_id
@@ -136,7 +137,7 @@ class LocalSubprocessDeployer(Deployer[SubprocessParams]):
             # 3. 获取虚拟环境Python解释器
             python_executable = self.venv_manager.get_python_executable(deployment_id)
 
-            # 4. 构建启动命令: python -m name --host --port
+            # 4. 构建启动命令: python -m name --host --port [--file ir_path]
             if not package_name:
                 raise RuntimeError("package_name is required for subprocess deployment")
 
@@ -147,6 +148,8 @@ class LocalSubprocessDeployer(Deployer[SubprocessParams]):
                 "--host", "0.0.0.0",
                 "--port", str(ctx.port)
             ]
+            if ir_path:
+                cmd.extend(["--file", ir_path])
             logger.debug(f"Command: {' '.join(cmd)}")
 
             # 5. 启动进程 (Windows: 使用新进程组，避免Ctrl+C影响子进程)

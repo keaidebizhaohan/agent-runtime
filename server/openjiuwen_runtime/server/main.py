@@ -5,7 +5,6 @@ FastAPI 服务器，提供 Agent 部署管理 REST API（支持租户隔离）
 
 import os
 import asyncio
-import json
 import logging
 import tempfile
 from pathlib import Path
@@ -18,11 +17,7 @@ from openjiuwen_runtime.management.manager import DeploymentManager, DeployMode
 from openjiuwen_runtime.management.models.enums import DeploymentType, DeploymentStatus
 from openjiuwen_runtime.foundation.db.sqlite_handler import SQLiteHandler
 from openjiuwen_runtime.foundation.db.mysql_handler import MySQLHandler
-from openjiuwen_runtime.foundation.packaging import package_python_to_whl
-from openjiuwen_runtime.foundation.port_utils import allocate_port
-from openjiuwen_runtime.foundation.port_utils import is_port_available
-from .config import settings
-from .converter.agent_converter import AgentConverter
+from openjiuwen_runtime.foundation.port_utils import allocate_port, is_port_available
 from .middleware.tenant import TenantContextMiddleware, get_tenant_context
 
 # 配置日志
@@ -53,7 +48,6 @@ else:
     raise ValueError(f"Unsupported DB_TYPE: {DB_TYPE}. Use 'sqlite' or 'mysql'.")
 
 manager = DeploymentManager(db_handler)
-agent_converter = AgentConverter()
 
 # 启动时初始化 manager
 @app.on_event("startup")
@@ -81,16 +75,16 @@ async def deploy_agent(
     request: Request,
     file: UploadFile,
     name: str = Query(..., description="部署名称（=包名）"),
-    deployer_type: str = Query(default="subprocess", description="部署器类型"),
+    mode: str = Query(default="subprocess", description="部署器类型"),
     port: int | None = Query(default=None, description="服务端口，不填则自动分配"),
 ):
     """
     部署 Agent（JSON 配置，低码方式）
 
     流程:
-    1. 接收上传的 JSON 配置文件
-    2. AgentConverter 将 JSON 转换为 Python 文件
-    3. Manager SDK 部署 Python 文件（自动注入租户信息）
+    1. 接收用户上传的 JSON 配置文件，保存为临时文件
+    2. 使用工程目录下预编译的 lowcode_agent_runner whl 包
+    3. 调用 Manager SDK 部署（传入 ir_path 和 whl_path）
     """
     # 获取租户上下文
     user_id, space_id = get_tenant_context(request)
@@ -103,76 +97,60 @@ async def deploy_agent(
         json_file_path = tmp_file.name
 
     try:
-        # 读取 JSON 配置
-        with open(json_file_path, 'r', encoding='utf-8') as f:
-            config_json = json.load(f)
-        logger.info(f"Loaded JSON config: {config_json}")
+        # 2. 端口分配和验证
+        if mode == "subprocess":
+            if port is None:
+                port = allocate_port()
+                logger.info(f"Auto-allocated port: {port}")
+            elif not is_port_available(port):
+                logger.error(f"Port {port} is already in use")
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Port {port} is occupied. Please use another port or leave it blank for auto-allocation."
+                )
+            logger.info(f"Port: {port}")
 
-        # 使用 AgentConverter 转换为 Python 文件
-        with tempfile.TemporaryDirectory() as temp_dir:
-            source_dir = await agent_converter.convert_to_pythonDir(
-                config_json=config_json,
-                name=name,
-                output_dir=temp_dir,
+        # 3. 使用预编译的 whl 包路径
+        whl_path = Path(__file__).parent.parent / "dist" / "lowcode_agent_runner-0.1.0-py3-none-any.whl"
+        if not whl_path.exists():
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"WHL file not found: {whl_path}"
             )
-            logger.info(f"Generated source directory: {source_dir}")
+        logger.info(f"Using WHL: {whl_path}")
 
-            whl_path = await package_python_to_whl(source_dir, package_name=name)
+        # 4. 调用 Manager SDK 部署（传入 ir_path 和 whl_path）
+        result = await manager.deploy_agent(
+            name=name,
+            version="1.0.0",
+            user_id=user_id,  # 注入租户信息
+            space_id=space_id,  # 注入租户信息
+            ir_path=json_file_path,  # 用户上传的 JSON 配置文件路径
+            whl_path=str(whl_path),  # 预编译的 whl 包路径
+            mode=DeployMode(mode),
+            port=port,
+        )
 
-            # 转换 deployer_type 为 DeployMode
-            deployer_type_map = {
-                "subprocess": DeployMode.SUBPROCESS,
-                "docker": DeployMode.DOCKER,
-                "k8s": DeployMode.K8S,
-            }
+        # 5. 过滤内部实现细节，只返回用户需要的信息
+        response = {
+            "deployment_id": result.deployment_id,
+            "type": result.deployment_type.value,
+            "name": result.name,
+            "status": result.deployment_status.value,
+            "url": result.url,
+        }
 
-            mode = deployer_type_map.get(deployer_type, DeployMode.SUBPROCESS)
-            logger.info(f"deployer_type: {deployer_type}, mode: {mode}")
-
-            # 端口分配和检查
-            if deployer_type == "local_subprocess":
-                if port is None:
-                    port = allocate_port()
-                    logger.info(f"Auto-allocated port: {port}")
-                elif not is_port_available(port):
-                    logger.error(f"Port {port} is already in use")
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail=f"Port {port} is occupied. Please use another port or leave it blank for auto-allocation."
-                    )
-                logger.info(f"Port: {port}")
-
-            # 调用 Manager SDK 部署（传入租户信息）
-            result = await manager.deploy_agent(
-                name=name,
-                version="1.0.0",
-                mode=mode,
-                user_id=user_id,  # 注入租户信息
-                space_id=space_id,  # 注入租户信息
-                whl_path=whl_path,
-                port=port,
-            )
-
-            # 过滤内部实现细节，只返回用户需要的信息
-            response = {
-                "deployment_id": result.deployment_id,
-                "type": result.deployment_type.value,
-                "name": result.name,
-                "status": result.deployment_status.value,
-                "url": result.url,
-            }
-
-            return JSONResponse(
-                status_code=status.HTTP_201_CREATED,
-                content=response
-            )
+        return JSONResponse(
+            status_code=status.HTTP_201_CREATED,
+            content=response
+        )
 
     except Exception as e:
         logger.error(f"Agent deployment failed: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Deployment failed: {str(e)}"
-        )
+    )
     finally:
         # 清理临时文件
         if 'json_file_path' in locals() and Path(json_file_path).exists():

@@ -33,6 +33,7 @@ class SubprocessStrategy(BaseDeploymentStrategy[ProcessInfo]):
             "url": kwargs.get("url"),
             "pid": kwargs.get("pid"),
             "whl_path": kwargs.get("whl_path"),
+            "ir_path": kwargs.get("ir_path"),
             "package_name": kwargs.get("package_name"),
             "venv_path": kwargs.get("venv_path"),
             "created_at": now,
@@ -54,6 +55,7 @@ class SubprocessStrategy(BaseDeploymentStrategy[ProcessInfo]):
             ),
             params=SubprocessParams(
                 whl_path=data.get("whl_path"),
+                ir_path=data.get("ir_path"),
                 package_name=data.get("package_name"),
                 venv_path=data.get("venv_path"),
             ),
