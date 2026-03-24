@@ -51,8 +51,9 @@ class VirtualEnvironmentManager:
         logger.info(f"Creating virtual environment: {venv_path}")
 
         try:
+            # 使用 uv 创建虚拟环境
             result = subprocess.run(
-                [sys.executable, "-m", "venv", str(venv_path)],
+                ["uv", "venv", str(venv_path)],
                 capture_output=True,
                 text=True
             )
@@ -148,9 +149,11 @@ class VirtualEnvironmentManager:
 
         logger.info(f"Installing WHL package: {whl_path} into {deployment_id}")
 
+        # 使用 uv pip 安装包，通过虚拟环境路径指定目标环境
         cmd = [
-            str(python_executable), "-m", "pip", "install",
-            whl_path
+            "uv", "pip", "install",
+            whl_path,
+            "--python", str(python_executable)
         ]
         logger.debug(f"Command: {' '.join(cmd)}")
 
