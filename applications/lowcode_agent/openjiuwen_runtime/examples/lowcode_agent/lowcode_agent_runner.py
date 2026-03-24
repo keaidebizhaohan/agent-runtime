@@ -12,6 +12,7 @@ Lowcode Agent App
 """
 
 import json
+import uuid
 from typing import AsyncIterator, Tuple
 
 from openjiuwen_runtime.service.app.agent_app import AgentApp
@@ -19,6 +20,12 @@ from openjiuwen.core.runner import Runner
 from openjiuwen.core.single_agent.agents.react_agent import ReActAgent
 from openjiuwen_studio.lowcode import AgentCompiler
 from openjiuwen_studio.lowcode.schemas import ModelOverride
+from openjiuwen_runtime.examples.lowcode_agent.agui_converter import (
+    agui_assistant_text_as_answer_events,
+    agui_trace_context,
+    convert_chunk_to_agui_events,
+    finalize_agui_stream,
+)
 
 FILE_PATH = ''
 
@@ -73,14 +80,22 @@ async def init():
 @app.query
 async def query(msgs, request) -> AsyncIterator[Tuple[dict, bool]]:
     """处理查询请求"""
+    conversation_id = request.conversation_id
+    trace_context = agui_trace_context(msgs or [])
     last_user_msg = None
-    for msg in reversed(msgs):
+    for msg in reversed(msgs or []):
         if msg.get("role") == "user":
             last_user_msg = msg.get("content", "")
             break
 
     if not last_user_msg:
-        yield {"type": "text", "content": "请输入您的问题"}, True
+        events = agui_assistant_text_as_answer_events(
+            trace_context=trace_context,
+            conversation_id=conversation_id,
+            assistant_text="请输入您的问题",
+        )
+        for i, event in enumerate(events):
+            yield event, i == len(events) - 1
         return
 
     inputs = {"query": last_user_msg}
@@ -88,17 +103,25 @@ async def query(msgs, request) -> AsyncIterator[Tuple[dict, bool]]:
     async for chunk in Runner.run_agent_streaming(
             agent=app.agent,
             inputs=inputs,
-            session=request.conversation_id
+            session=conversation_id
     ):
         if chunk:
-            if hasattr(chunk, 'model_dump'):
-                yield chunk.model_dump(), False
-            elif hasattr(chunk, 'payload') and hasattr(chunk, 'type'):
-                yield {"type": chunk.type, "index": getattr(chunk, 'index', 0), "payload": chunk.payload}, False
-            else:
-                yield {"type": "text", "content": str(chunk)}, False
+            events = convert_chunk_to_agui_events(
+                chunk=chunk,
+                trace_context=trace_context,
+                conversation_id=conversation_id,
+            )
+            for event in events:
+                yield event, False
 
-    yield {"type": "text", "content": ""}, True
+    final_events = finalize_agui_stream(
+        trace_context=trace_context,
+        conversation_id=conversation_id,
+    )
+
+    for i, event in enumerate(final_events):
+            yield event, i == len(final_events) - 1
+        
 
 
 @app.shutdown

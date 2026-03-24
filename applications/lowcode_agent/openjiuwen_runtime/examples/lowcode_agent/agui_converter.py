@@ -1,15 +1,12 @@
 #!/usr/bin/env python
 # -*- coding: UTF-8 -*-
-# Copyright (c) Huawei Technologies Co., Ltd. 2025-2025. All rights reserved.
 
 """
-AG-UI converter for openJiuwen agent streaming chunks.
+AG-UI converter for agent streaming chunks.
 
-将底层 streaming chunk（TraceSchema / OutputSchema）转换为 AG-UI SSE 事件对象
-（每条对应一行 ``data: <json>``）。
+Converts low-level streaming chunks (TraceSchema / OutputSchema) into
+AG-UI SSE event objects, where each event maps to one ``data: <json>`` line.
 
-由 agent-runtime 低码部署与 agent-studio AgentRunner 共用逻辑；
-ReActAgent 的 ``llm_output`` 使用 ``payload.content``，``answer`` 使用 ``payload.output``。
 """
 
 from __future__ import annotations
@@ -17,12 +14,13 @@ from __future__ import annotations
 import json
 import uuid
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
 
 
 @dataclass
 class AgUiStreamState:
-    """AG-UI SSE 事件组装状态（每个 run / conversation 一份）"""
+    """AG-UI SSE event assembly state (one per run/conversation)."""
 
     thread_id: str
     run_id: str = field(default_factory=lambda: f"run_{uuid.uuid4().hex}")
@@ -31,6 +29,14 @@ class AgUiStreamState:
     text_started: bool = False
     text_acc: str = ""
     finished: bool = False
+
+
+def agui_trace_context(messages: list) -> Any:
+    """Lightweight context for AG-UI conversion (`agent_input` feeds RUN_STARTED)."""
+    return SimpleNamespace(
+        trace_id=None,
+        agent_input={"messages": messages, "tools": [], "context": []},
+    )
 
 
 def _get_or_create_agui_state(trace_context: Any, thread_id: str) -> AgUiStreamState:
@@ -49,9 +55,9 @@ def _get_or_create_agui_state(trace_context: Any, thread_id: str) -> AgUiStreamS
 
 def convert_chunk_to_agui_events(chunk: Any, trace_context: Any, conversation_id: str) -> List[Dict[str, Any]]:
     """
-    将底层 streaming chunk 转为 AG-UI SSE 事件（data 行 JSON 对象）。
+    Convert low-level streaming chunks to AG-UI SSE events (JSON data lines).
 
-    返回值为事件对象列表（上层包装为 SSE 的 ``data: <json>``）。
+    Returns a list of event objects (the caller wraps them as ``data: <json>``).
     """
     from openjiuwen.core.session.stream.base import TraceSchema, OutputSchema
 
@@ -166,7 +172,8 @@ def convert_chunk_to_agui_events(chunk: Any, trace_context: Any, conversation_id
 
 def finalize_agui_stream(trace_context: Any, conversation_id: str) -> List[Dict[str, Any]]:
     """
-    流式迭代结束后调用：若尚未 ``RUN_FINISHED``（例如上游未发 ``answer``），补发结束事件。
+    Call at the end of streaming iteration to emit missing end events when needed
+    (for example, if upstream did not emit an ``answer`` chunk).
     """
     state = getattr(trace_context, "_agui_state", None)
     if not isinstance(state, AgUiStreamState) or state.finished:
@@ -198,8 +205,10 @@ def agui_assistant_text_as_answer_events(
     assistant_text: str,
 ) -> List[Dict[str, Any]]:
     """
-    将一段固定 assistant 文案转为 AG-UI 事件（RUN_STARTED + 文本 + RUN_FINISHED）。
-    用于校验失败、异常提示等无底层 chunk 的场景。
+    Convert a fixed assistant text into AG-UI events
+    (RUN_STARTED + text + RUN_FINISHED).
+    Useful for validation failures or exception messages when no low-level chunk
+    stream is available.
     """
     from openjiuwen.core.session.stream.base import OutputSchema
 
