@@ -121,23 +121,31 @@ class LocalSubprocessDeployer(Deployer[SubprocessParams]):
             subprocess_params = ctx.params or SubprocessParams()
             whl_path = subprocess_params.whl_path
             ir_path = subprocess_params.ir_path
-            package_name = subprocess_params.package_name
-            # venv_path = subprocess_params.venv_path or os.path.join(
-            #     self.venv_base_path, ctx.deployment_id
-            # )
+            if ir_path:
+                package_name = 'openjiuwen_runtime.examples.lowcode_agent'
+            else:
+                package_name = subprocess_params.package_name
 
             # 1. 创建虚拟环境
             venv_path = self.venv_manager.create_venv(deployment_id)
             logger.info(f"Virtual environment created: {venv_path}")
 
-            # 2. 安装WHL包
+            # 2. 如果有 ir_path，拷贝到虚拟环境
+            venv_ir_path = None
+            if ir_path:
+                import shutil
+                venv_ir_path = os.path.join(venv_path, os.path.basename(ir_path))
+                shutil.copy2(ir_path, venv_ir_path)
+                logger.info(f"IR file copied to venv: {ir_path} -> {venv_ir_path}")
+
+            # 3. 安装WHL包
             self.venv_manager.install_whl(deployment_id, whl_path)
             logger.info(f"WHL package installed: {whl_path}")
 
-            # 3. 获取虚拟环境Python解释器
+            # 4. 获取虚拟环境Python解释器
             python_executable = self.venv_manager.get_python_executable(deployment_id)
 
-            # 4. 构建启动命令: python -m name --host --port [--file ir_path]
+            # 5. 构建启动命令: python -m name --host --port [--file ir_path]
             if not package_name:
                 raise RuntimeError("package_name is required for subprocess deployment")
 
@@ -148,11 +156,11 @@ class LocalSubprocessDeployer(Deployer[SubprocessParams]):
                 "--host", "0.0.0.0",
                 "--port", str(ctx.port)
             ]
-            if ir_path:
-                cmd.extend(["--file", ir_path])
+            if venv_ir_path:
+                cmd.extend(["--file", venv_ir_path])
             logger.debug(f"Command: {' '.join(cmd)}")
 
-            # 5. 启动进程 (Windows: 使用新进程组，避免Ctrl+C影响子进程)
+            # 6. 启动进程 (Windows: 使用新进程组，避免Ctrl+C影响子进程)
             creation_flags = 0
             if sys.platform == "win32":
                 creation_flags = subprocess.CREATE_NEW_PROCESS_GROUP
