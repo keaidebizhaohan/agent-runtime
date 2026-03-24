@@ -18,8 +18,9 @@ from openjiuwen_runtime.management.models.enums import DeploymentType, Deploymen
 from openjiuwen_runtime.foundation.db.sqlite_handler import SQLiteHandler
 from openjiuwen_runtime.foundation.db.mysql_handler import MySQLHandler
 from openjiuwen_runtime.foundation.port_utils import allocate_port, is_port_available
-from .converter.agent_converter import AgentConverter, AGENT_NAME
 from .middleware.tenant import TenantContextMiddleware, get_tenant_context
+
+AGENT_NAME = "packed_agent.py"
 
 # 配置日志
 logging.basicConfig(
