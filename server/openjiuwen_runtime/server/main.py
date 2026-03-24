@@ -111,7 +111,7 @@ async def deploy_agent(
             logger.info(f"Port: {port}")
 
         # 3. 使用预编译的 whl 包路径
-        whl_path = Path(__file__).parent.parent / "dist" / "lowcode_agent_runner-0.1.0-py3-none-any.whl"
+        whl_path = Path(__file__).parent.parent.parent / "dist" / "lowcode_agent_runner-0.1.0-py3-none-any.whl"
         if not whl_path.exists():
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
