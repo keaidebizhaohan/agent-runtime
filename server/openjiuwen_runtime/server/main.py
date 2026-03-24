@@ -18,6 +18,7 @@ from openjiuwen_runtime.management.models.enums import DeploymentType, Deploymen
 from openjiuwen_runtime.foundation.db.sqlite_handler import SQLiteHandler
 from openjiuwen_runtime.foundation.db.mysql_handler import MySQLHandler
 from openjiuwen_runtime.foundation.port_utils import allocate_port, is_port_available
+from .converter.agent_converter import AgentConverter, AGENT_NAME
 from .middleware.tenant import TenantContextMiddleware, get_tenant_context
 
 # 配置日志
@@ -121,7 +122,7 @@ async def deploy_agent(
 
         # 4. 调用 Manager SDK 部署（传入 ir_path 和 whl_path）
         result = await manager.deploy_agent(
-            name=name,
+            name=AGENT_NAME,
             version="1.0.0",
             user_id=user_id,  # 注入租户信息
             space_id=space_id,  # 注入租户信息
