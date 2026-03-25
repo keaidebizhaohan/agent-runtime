@@ -195,6 +195,8 @@ class LocalSubprocessDeployer(Deployer[SubprocessParams]):
                 deployment_id=deployment_id,
                 message="Deployment started successfully",
                 url=url,
+                pid=process.pid,
+                venv_path=str(venv_path),
             )
 
         except Exception as e:

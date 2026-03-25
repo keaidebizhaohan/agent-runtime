@@ -62,6 +62,26 @@ class SubprocessStrategy(BaseDeploymentStrategy[ProcessInfo]):
             data=data.get("data"),
         )
 
+    async def deploy(self, deployment_id: str, db_handler) -> Any:
+        """部署并更新 pid 和 venv_path 到子表"""
+        result = await super().deploy(deployment_id, db_handler)
+
+        # 部署成功后，更新子表记录的 pid 和 venv_path
+        if result.success and (result.pid is not None or result.venv_path):
+            update_data = {}
+            if result.pid is not None:
+                update_data["pid"] = result.pid
+            if result.venv_path:
+                update_data["venv_path"] = result.venv_path
+
+            await db_handler.update(
+                self._table_def.table_name,
+                {"deployment_id": deployment_id},
+                update_data,
+            )
+
+        return result
+
     def _get_stop_kwargs(self, record: Any) -> dict:
         if hasattr(record, "to_dict"):
             data = record.to_dict()

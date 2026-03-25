@@ -50,3 +50,5 @@ class DeployResult:
     deployment_id: str
     message: Optional[str] = None
     url: Optional[str] = None
+    pid: Optional[int] = None
+    venv_path: Optional[str] = None
