@@ -34,6 +34,8 @@ class SQLAlchemyHandler(DBHandler):
 
     async def connect(self) -> None:
         logger.info("Connecting to database")
+        # 关闭 aiosqlite 的 DEBUG 日志
+        logging.getLogger("aiosqlite").setLevel(logging.WARNING)
         self.engine = create_async_engine(self.database_url, echo=False)
         self.session_factory = async_sessionmaker(
             self.engine, class_=AsyncSession, expire_on_commit=False
