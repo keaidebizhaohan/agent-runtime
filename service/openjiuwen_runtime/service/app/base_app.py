@@ -7,9 +7,59 @@ BaseApp - AgentApp 和 PluginApp 的基类
 - 健康检查端点 (/health)
 - 运行方法 (uvicorn 服务器)
 """
-from typing import Callable, Optional
+import argparse
+import os
+import sys
+from pathlib import Path
+from typing import Callable, Optional, Dict, Any
 from fastapi import FastAPI
 import uvicorn
+
+
+def _setup_runtime_env(kwargs: Dict[str, Any]) -> None:
+    """
+    从 kwargs 中提取运行时环境变量配置并设置环境变量。
+
+    参数:
+        kwargs: 传入的额外参数字典
+    """
+    userdata = kwargs.pop("userdata", None)
+    if userdata is not None:
+        os.environ["RUNTIME_USERDATA"] = str(userdata)
+
+    # 处理 file 参数，设置环境变量
+    file_path = kwargs.pop("file", None)
+    if file_path is not None:
+        os.environ["RUNTIME_IR_PATH"] = str(file_path)
+
+
+def _parse_cli_args() -> Dict[str, Any]:
+    """
+    解析命令行参数。
+
+    返回:
+        包含 host, port, userdata, irpath(可选) 的字典
+    """
+    parser = argparse.ArgumentParser(
+        description=f"Run {os.path.basename(sys.argv[0])}"
+    )
+    parser.add_argument("--host", type=str, default="0.0.0.0", help="监听地址 (默认: 0.0.0.0)")
+    parser.add_argument("--port", "-p", type=int, default=8090, help="监听端口 (默认: 8090)")
+    parser.add_argument("--userdata", "-u", type=str, default=None, help="用户数据，设置环境变量 RUNTIME_USERDATA")
+    parser.add_argument("--irpath", "-i", type=str, default=None, help="IR 配置文件路径")
+
+    args = parser.parse_args()
+    result = {"host": args.host, "port": args.port}
+    if args.userdata:
+        result["userdata"] = args.userdata
+    if args.irpath:
+        file_path = str(Path(args.irpath).resolve())
+        if not Path(args.irpath).exists():
+            print(f"[ERROR] 配置文件不存在: {file_path}")
+            sys.exit(1)
+        result["file"] = file_path
+
+    return result
 
 
 class BaseApp:
@@ -97,14 +147,36 @@ class BaseApp:
                 "version": self.version,
             }
 
-    def run(self, host: str = "0.0.0.0", port: int = 8090, **kwargs):
+    def run(self, host: str = None, port: int = None, **kwargs):
         """
-        运行应用
+        运行应用，自动从命令行解析参数。
+
+        命令行参数:
+            --host: 监听地址 (默认: 0.0.0.0)
+            --port, -p: 监听端口 (默认: 8090)
+            --userdata, -u: 用户数据，设置环境变量 RUNTIME_USERDATA
+            --irpath, -i: IR 配置文件路径 (可选)
 
         参数:
-            host: 绑定主机 (默认: 0.0.0.0)
-            port: 绑定端口 (默认: 8090)
+            host: 绑定主机，命令行参数优先
+            port: 绑定端口，命令行参数优先
+            userdata: 用户数据，会设置为环境变量 RUNTIME_USERDATA
             **kwargs: 传递给 uvicorn.run() 的额外参数
         """
+        # 解析命令行参数
+        cli_args = _parse_cli_args()
+
+        # 命令行参数优先，然后是传入参数，最后是默认值
+        if host is None:
+            host = cli_args.get("host", "0.0.0.0")
+        if port is None:
+            port = cli_args.get("port", 8090)
+        if "userdata" in cli_args:
+            kwargs["userdata"] = cli_args["userdata"]
+        if "file" in cli_args:
+            kwargs["file"] = cli_args["file"]
+
+        _setup_runtime_env(kwargs)
+
         print(f"Starting {self.app_name} v{self.version} on http://{host}:{port}")
         uvicorn.run(self.app, host=host, port=port, **kwargs)

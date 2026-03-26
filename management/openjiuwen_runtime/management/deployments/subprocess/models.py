@@ -16,6 +16,7 @@ class SubprocessParams:
     ir_path: Optional[str] = None
     package_name: Optional[str] = None
     venv_path: Optional[str] = None
+    userdata: Optional[str] = None
 
 
 class ProcessInfo(BaseModel):

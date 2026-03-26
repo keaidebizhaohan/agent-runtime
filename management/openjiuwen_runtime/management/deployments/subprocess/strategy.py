@@ -46,6 +46,9 @@ class SubprocessStrategy(BaseDeploymentStrategy[ProcessInfo]):
             data = record.to_dict()
         else:
             data = record
+        # 从 data 字段中提取 userdata
+        record_data = data.get("data") or {}
+        userdata = record_data.get("userdata") if isinstance(record_data, dict) else None
         return DeployContext(
             common=CommonParams(
                 deployment_id=data.get("deployment_id"),
@@ -58,6 +61,7 @@ class SubprocessStrategy(BaseDeploymentStrategy[ProcessInfo]):
                 ir_path=data.get("ir_path"),
                 package_name=data.get("package_name"),
                 venv_path=data.get("venv_path"),
+                userdata=userdata,
             ),
             data=data.get("data"),
         )

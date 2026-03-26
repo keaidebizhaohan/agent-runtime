@@ -79,6 +79,7 @@ async def deploy_agent(
     name: str = Query(..., description="部署名称（=包名）"),
     mode: str = Query(default="subprocess", description="部署器类型"),
     port: int | None = Query(default=None, description="服务端口，不填则自动分配"),
+    userdata: str | None = Query(default=None, description="用户自定义数据"),
 ):
     """
     部署 Agent（JSON 配置，低码方式）
@@ -86,11 +87,11 @@ async def deploy_agent(
     流程:
     1. 接收用户上传的 JSON 配置文件，保存为临时文件
     2. 使用工程目录下预编译的 lowcode_agent_runner whl 包
-    3. 调用 Manager SDK 部署（传入 ir_path 和 whl_path）
+    3. 调用 Manager SDK 部署（传入 ir_path、whl_path 和 userdata）
     """
     # 获取租户上下文
     user_id, space_id = get_tenant_context(request)
-    logger.info(f"Received agent deploy request: user_id={user_id}, space_id={space_id}, name={name}")
+    logger.info(f"Received agent deploy request: user_id={user_id}, space_id={space_id}, name={name}, userdata={userdata}")
 
     # 保存上传的 JSON 文件到临时目录
     content = await file.read()
@@ -121,7 +122,7 @@ async def deploy_agent(
             )
         logger.info(f"Using WHL: {whl_path}")
 
-        # 4. 调用 Manager SDK 部署（传入 ir_path 和 whl_path）
+        # 4. 调用 Manager SDK 部署（传入 ir_path、whl_path 和 userdata）
         result = await manager.deploy_agent(
             name=AGENT_NAME,
             version="1.0.0",
@@ -131,6 +132,7 @@ async def deploy_agent(
             whl_path=str(whl_path),  # 预编译的 whl 包路径
             mode=DeployMode(mode),
             port=port,
+            data={"userdata": userdata} if userdata else None,  # 用户自定义数据
         )
 
         # 5. 过滤内部实现细节，只返回用户需要的信息
@@ -261,4 +263,4 @@ async def delete_agent(request: Request, deployment_id: str):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8001)

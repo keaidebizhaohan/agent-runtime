@@ -12,6 +12,7 @@ Lowcode Agent App
 """
 
 import json
+import os
 import uuid
 from typing import AsyncIterator, Tuple
 
@@ -58,9 +59,14 @@ def _get_model_overrides() -> dict:
 @app.init
 async def init():
     """初始化并加载 Agent"""
-    export_data = _load_export_data(FILE_PATH)
+    # 从环境变量读取配置文件路径
+    file_path = os.environ.get("RUNTIME_IR_PATH")
+    export_data = _load_export_data(file_path)
     model_overrides = _get_model_overrides()
     compiler = AgentCompiler()
+
+    # 从环境变量读取用户数据
+    userdata = os.environ.get("RUNTIME_USERDATA")
 
     result = await compiler.compile_for_runtime(
         config=export_data,
@@ -74,7 +80,8 @@ async def init():
     app.agent = agent
 
     print(f"[OK] Agent 加载成功! Type: {type(app.agent).__name__}")
-    print(f"[INFO] 使用配置文件: {FILE_PATH}")
+    print(f"[INFO] 使用配置文件: {file_path}")
+    print(f"[INFO] 用户数据: {userdata}")
 
 
 @app.query

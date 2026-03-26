@@ -121,6 +121,7 @@ class LocalSubprocessDeployer(Deployer[SubprocessParams]):
             subprocess_params = ctx.params or SubprocessParams()
             whl_path = subprocess_params.whl_path
             ir_path = subprocess_params.ir_path
+            userdata = subprocess_params.userdata
             if ir_path:
                 package_name = 'openjiuwen_runtime.examples.lowcode_agent'
             else:
@@ -145,7 +146,7 @@ class LocalSubprocessDeployer(Deployer[SubprocessParams]):
             # 4. 获取虚拟环境Python解释器
             python_executable = self.venv_manager.get_python_executable(deployment_id)
 
-            # 5. 构建启动命令: python -m name --host --port [--file ir_path]
+            # 5. 构建启动命令: python -m name --host --port [--irpath ir_path] [--userdata userdata]
             if not package_name:
                 raise RuntimeError("package_name is required for subprocess deployment")
 
@@ -157,7 +158,10 @@ class LocalSubprocessDeployer(Deployer[SubprocessParams]):
                 "--port", str(ctx.port)
             ]
             if venv_ir_path:
-                cmd.extend(["--file", venv_ir_path])
+                cmd.extend(["--irpath", venv_ir_path])
+            if userdata:
+                cmd.extend(["--userdata", userdata])
+                logger.info(f"Using userdata: {userdata}")
             logger.debug(f"Command: {' '.join(cmd)}")
 
             # 6. 启动进程 (Windows: 使用新进程组，避免Ctrl+C影响子进程)

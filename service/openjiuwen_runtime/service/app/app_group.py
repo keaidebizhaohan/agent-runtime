@@ -12,7 +12,7 @@ from typing import Dict
 from fastapi import FastAPI
 import uvicorn
 
-from .base_app import BaseApp
+from .base_app import BaseApp, _setup_runtime_env, _parse_cli_args
 from .agent_app import AgentApp
 from .plugin_app import PluginApp
 
@@ -186,15 +186,37 @@ class AppGroup:
                 },
             }
 
-    def run(self, host: str = "0.0.0.0", port: int = 8090, **kwargs):
+    def run(self, host: str = None, port: int = None, **kwargs):
         """
-        运行所有挂载应用。
+        运行所有挂载应用，自动从命令行解析参数。
+
+        命令行参数:
+            --host: 监听地址 (默认: 0.0.0.0)
+            --port, -p: 监听端口 (默认: 8090)
+            --userdata, -u: 用户数据，设置环境变量 RUNTIME_USERDATA
+            --irpath, -i: IR 配置文件路径 (可选)
 
         参数:
-            host: 绑定主机 (默认: 0.0.0.0)
-            port: 绑定端口 (默认: 8090)
+            host: 绑定主机，命令行参数优先
+            port: 绑定端口，命令行参数优先
+            userdata: 用户数据，会设置为环境变量 RUNTIME_USERDATA
             **kwargs: 传递给 uvicorn.run() 的额外参数
         """
+        # 解析命令行参数
+        cli_args = _parse_cli_args()
+
+        # 命令行参数优先，然后是传入参数，最后是默认值
+        if host is None:
+            host = cli_args.get("host", "0.0.0.0")
+        if port is None:
+            port = cli_args.get("port", 8090)
+        if "userdata" in cli_args:
+            kwargs["userdata"] = cli_args["userdata"]
+        if "file" in cli_args:
+            kwargs["file"] = cli_args["file"]
+
+        _setup_runtime_env(kwargs)
+
         # 注册路由和生命周期事件 (只执行一次)
         if not self._routes_registered:
             self._register_routes()
