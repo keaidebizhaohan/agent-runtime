@@ -4,11 +4,10 @@ FastAPI 服务器，提供 Agent 部署管理 REST API（支持租户隔离）
 """
 
 import os
-import asyncio
 import logging
 import tempfile
 from pathlib import Path
-from typing import Dict, Any, Optional
+from .config import settings
 
 from fastapi import FastAPI, HTTPException, UploadFile, Query, status, Request
 from fastapi.responses import JSONResponse
