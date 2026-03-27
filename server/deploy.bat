@@ -1,73 +1,99 @@
 @echo off
-REM Agent Runtime Server 一键部署脚本
+setlocal
+REM Agent Runtime Server one-click deploy script (Windows)
 
 echo ========================================
-echo   Agent Runtime Server 部署脚本
+echo   Agent Runtime Server Deploy Script
 echo ========================================
 echo.
 
-REM 检查 uv
-echo [1/5] 检查环境...
+REM 1) Check uv
+echo [1/5] Checking environment...
 uv --version >nul 2>&1
 if %errorlevel% neq 0 (
-    echo   ✗ uv 未安装，请先安装 uv: pip install uv
+    echo   [ERROR] uv is not installed. Please run: pip install uv
     exit /b 1
 )
-for /f "tokens=*" %%v in ('uv --version') do set UV_VERSION=%%v
-echo   ✓ uv %UV_VERSION%
+echo   [OK] uv is installed
+uv --version
 
-REM 切换到脚本目录
+REM Move to script directory
 cd /d "%~dp0"
-echo   工作目录: %CD%
+echo   Working directory: %CD%
 
-REM 创建虚拟环境
+REM Find an available port starting from 8100 (do not kill existing process)
 echo.
-echo [2/5] 创建虚拟环境...
+echo [pre] Finding available port from :8100...
+set "SERVER_PORT="
+for /f %%p in ('powershell -NoProfile -Command "$start=8100; for($i=$start; $i -lt $start+200; $i++){ $used=Get-NetTCPConnection -LocalPort $i -State Listen -ErrorAction SilentlyContinue; if(-not $used){ Write-Output $i; exit 0 } }; exit 1"') do set "SERVER_PORT=%%p"
+if "%SERVER_PORT%"=="" (
+    echo   [ERROR] No available port found in range 8100-8299
+    exit /b 1
+)
+echo   [OK] Selected port: %SERVER_PORT%
+
+REM 2) Create venv
+echo.
+echo [2/5] Creating virtual environment...
 if not exist ".venv" (
     uv venv
-    echo   ✓ 虚拟环境创建成功
+    echo   [OK] Virtual environment created
 ) else (
-    echo   ✓ 虚拟环境已存在
+    if exist ".venv\pyvenv.cfg" (
+        echo   [OK] Virtual environment already exists
+    ) else (
+        echo   [WARN] .venv is incomplete ^(missing pyvenv.cfg^), recreating...
+        if exist ".venv" rmdir /s /q ".venv"
+        uv venv
+        if errorlevel 1 (
+            echo   [ERROR] Failed to recreate virtual environment
+            echo   [HINT] Close running servers/terminals that may lock .venv, then retry
+            exit /b 1
+        )
+        echo   [OK] Virtual environment recreated
+    )
 )
 
-REM 同步依赖
+REM 3) Sync dependencies if pyproject exists
 echo.
-echo [3/5] 同步依赖...
+echo [3/5] Sync dependencies...
 uv sync >nul 2>&1
 if %errorlevel% neq 0 (
-    echo   ! 无 pyproject.toml，跳过 uv sync
+    echo   [WARN] pyproject.toml not found, skip uv sync
 ) else (
-    echo   ✓ 依赖同步成功
+    echo   [OK] Dependencies synced
 )
 
-REM 安装 management
+REM 4) Install management SDK
 echo.
-echo [4/5] 安装 management SDK...
-uv pip install -e ..\management >nul 2>&1
-if %errorlevel% neq 0 (
-    echo   ✗ management SDK 安装失败
+echo [4/5] Installing management SDK...
+uv pip install -e ..\management --force-reinstall >nul 2>&1
+if errorlevel 1 (
+    echo   [ERROR] Failed to install management SDK
+    echo   [HINT] Ensure no old server process is using .venv files
     exit /b 1
 )
-echo   ✓ management SDK 安装成功
+echo   [OK] management SDK installed
 
-REM 安装 foundation
+REM 5) Install foundation SDK
 echo.
-echo [5/5] 安装 foundation SDK...
-uv pip install -e ..\foundation >nul 2>&1
-if %errorlevel% neq 0 (
-    echo   ✗ foundation SDK 安装失败
+echo [5/5] Installing foundation SDK...
+uv pip install -e ..\foundation --force-reinstall >nul 2>&1
+if errorlevel 1 (
+    echo   [ERROR] Failed to install foundation SDK
+    echo   [HINT] Ensure no old server process is using .venv files
     exit /b 1
 )
-echo   ✓ foundation SDK 安装成功
+echo   [OK] foundation SDK installed
 
-REM 启动服务器
+REM Start server
 echo.
-echo 启动服务器...
+echo Starting server...
 echo.
 echo ========================================
-echo   API: http://localhost:8000
-echo   文档: http://localhost:8000/docs
+echo   API:  http://localhost:%SERVER_PORT%
+echo   Docs: http://localhost:%SERVER_PORT%/docs
 echo ========================================
 echo.
 
-uv run -m openjiuwen_runtime.server.main
+uv run -m uvicorn openjiuwen_runtime.server.main:app --host 0.0.0.0 --port %SERVER_PORT%
