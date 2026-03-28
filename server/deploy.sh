@@ -1,66 +1,94 @@
 #!/bin/bash
-# Agent Runtime Server 一键部署脚本
+# Agent Runtime Server one-click deploy script
 
 set -e
 
 echo "========================================"
-echo "  Agent Runtime Server 部署脚本"
+echo "  Agent Runtime Server Deploy Script"
 echo "========================================"
 echo ""
 
-# 检查 uv
-echo "[1/5] 检查环境..."
+# Check uv
+echo "[1/5] Checking environment..."
 if ! command -v uv &> /dev/null; then
-    echo "  ✗ uv 未安装，请先安装 uv: pip install uv"
+    echo "  [ERROR] uv is not installed. Please install it first: pip install uv"
     exit 1
 fi
 UV_VERSION=$(uv --version)
 echo "  ✓ uv $UV_VERSION"
 
-# 切换到脚本目录
+# Switch to script directory
 cd "$(dirname "$0")"
-echo "  工作目录: $(pwd)"
+echo "  Working directory: $(pwd)"
 
-# 创建虚拟环境
+# Find an available port starting from 8100
 echo ""
-echo "[2/5] 创建虚拟环境..."
+echo "[pre] Checking available port (starting from 8100)..."
+SERVER_PORT=""
+for p in $(seq 8100 8299); do
+    if command -v ss >/dev/null 2>&1; then
+        if ss -ltn "( sport = :$p )" 2>/dev/null | awk 'NR>1{found=1} END{exit found?0:1}'; then
+            continue
+        fi
+        SERVER_PORT="$p"
+        break
+    elif command -v lsof >/dev/null 2>&1; then
+        if lsof -iTCP:"$p" -sTCP:LISTEN -t >/dev/null 2>&1; then
+            continue
+        fi
+        SERVER_PORT="$p"
+        break
+    else
+        echo "  [ERROR] Missing port-check tools: please install ss (iproute2) or lsof"
+        exit 1
+    fi
+done
+if [ -z "${SERVER_PORT}" ]; then
+    echo "  [ERROR] No available port found in range 8100-8299"
+    exit 1
+fi
+echo "  [OK] Selected port: $SERVER_PORT"
+
+# Create virtual environment
+echo ""
+echo "[2/5] Creating virtual environment..."
 if [ ! -d ".venv" ]; then
     uv venv
-    echo "  ✓ 虚拟环境创建成功"
+    echo "  [OK] Virtual environment created"
 else
-    echo "  ✓ 虚拟环境已存在"
+    echo "  [OK] Virtual environment already exists"
 fi
 
-# 同步依赖
+# Sync dependencies
 echo ""
-echo "[3/5] 同步依赖..."
+echo "[3/5] Syncing dependencies..."
 if [ -f "pyproject.toml" ]; then
     uv sync > /dev/null 2>&1
-    echo "  ✓ 依赖同步成功"
+    echo "  [OK] Dependencies synced"
 else
-    echo "  ! 无 pyproject.toml，跳过 uv sync"
+    echo "  [WARN] No pyproject.toml, skipping uv sync"
 fi
 
-# 安装 management
+# Install management SDK
 echo ""
-echo "[4/5] 安装 management SDK..."
-uv pip install -e ../management > /dev/null 2>&1
-echo "  ✓ management SDK 安装成功"
+echo "[4/5] Installing management SDK..."
+uv pip install -e ../management --force-reinstall > /dev/null 2>&1
+echo "  [OK] management SDK installed"
 
-# 安装 foundation
+# Install foundation SDK
 echo ""
-echo "[5/5] 安装 foundation SDK..."
-uv pip install -e ../foundation > /dev/null 2>&1
-echo "  ✓ foundation SDK 安装成功"
+echo "[5/5] Installing foundation SDK..."
+uv pip install -e ../foundation --force-reinstall > /dev/null 2>&1
+echo "  [OK] foundation SDK installed"
 
-# 启动服务器
+# Start server
 echo ""
-echo "启动服务器..."
+echo "Starting server..."
 echo ""
 echo "========================================"
-echo "  API: http://localhost:8000"
-echo "  文档: http://localhost:8000/docs"
+echo "  API: http://localhost:$SERVER_PORT"
+echo "  Docs: http://localhost:$SERVER_PORT/docs"
 echo "========================================"
 echo ""
 
-uv run -m openjiuwen_runtime.server.main
+uv run -m uvicorn openjiuwen_runtime.server.main:app --host 0.0.0.0 --port "$SERVER_PORT"

@@ -263,4 +263,4 @@ async def delete_agent(request: Request, deployment_id: str):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8001)
+    uvicorn.run(app, host="0.0.0.0", port=8100)
