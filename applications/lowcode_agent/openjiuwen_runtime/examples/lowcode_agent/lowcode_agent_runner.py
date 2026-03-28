@@ -31,6 +31,42 @@ from openjiuwen_runtime.examples.lowcode_agent.agui_converter import (
     finalize_agui_stream,
 )
 
+
+# ==================== 日志脱敏工具 ====================
+def mask_userdata(userdata: str | None, max_bytes: int = 10) -> str:
+    """
+    对userdata进行脱敏处理，只保留前N字节，其余隐藏
+
+    Args:
+        userdata: 用户数据字符串
+        max_bytes: 保留的最大字节数，默认10字节
+
+    Returns:
+        脱敏后的字符串
+    """
+    if userdata is None:
+        return "None"
+
+    if not isinstance(userdata, str):
+        userdata = str(userdata)
+
+    # 编码为字节获取准确长度
+    userdata_bytes = userdata.encode('utf-8')
+
+    if len(userdata_bytes) <= max_bytes:
+        return userdata
+
+    # 只保留前max_bytes字节
+    masked_bytes = userdata_bytes[:max_bytes]
+    try:
+        masked_str = masked_bytes.decode('utf-8', errors='ignore')
+    except UnicodeDecodeError:
+        # 如果解码失败，直接返回截断前的原始字符串前几个字符
+        masked_str = userdata[:max_bytes]
+
+    return f"{masked_str}***"
+
+
 # ==================== 日志配置 ====================
 def _get_venv_path() -> str:
     """动态获取虚拟环境路径"""
@@ -152,7 +188,7 @@ async def init():
 
     # 从环境变量读取用户数据
     userdata = os.environ.get("RUNTIME_USERDATA")
-    logger.info(f"用户数据: {userdata}")
+    logger.info(f"用户数据: {mask_userdata(userdata)}")
 
     logger.info("开始编译 Agent 配置...")
     result = await compiler.compile_for_runtime(
@@ -170,7 +206,7 @@ async def init():
     logger.info(f"Agent Card: {result['agent_card'].name}")
     print(f"[OK] Agent 加载成功! Type: {type(app.agent).__name__}")
     print(f"[INFO] 使用配置文件: {file_path}")
-    print(f"[INFO] 用户数据: {userdata}")
+    print(f"[INFO] 用户数据: {mask_userdata(userdata)}")
 
 
 @app.query

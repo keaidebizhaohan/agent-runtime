@@ -13,6 +13,7 @@ from fastapi import FastAPI, HTTPException, UploadFile, Query, status, Request
 from fastapi.responses import JSONResponse
 
 from openjiuwen_runtime.management.manager import DeploymentManager, DeployMode
+from .utils import mask_userdata
 from openjiuwen_runtime.management.models.enums import DeploymentType, DeploymentStatus
 from openjiuwen_runtime.foundation.db.sqlite_handler import SQLiteHandler
 from openjiuwen_runtime.foundation.db.mysql_handler import MySQLHandler
@@ -90,7 +91,7 @@ async def deploy_agent(
     """
     # 获取租户上下文
     user_id, space_id = get_tenant_context(request)
-    logger.info(f"Received agent deploy request: user_id={user_id}, space_id={space_id}, name={name}, userdata={userdata}")
+    logger.info(f"Received agent deploy request: user_id={user_id}, space_id={space_id}, name={name}, userdata={mask_userdata(userdata)}")
 
     # 保存上传的 JSON 文件到临时目录
     content = await file.read()
