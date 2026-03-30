@@ -29,7 +29,6 @@ dependencies = [
 
 [tool.uv]
 default-groups = ['dev']
-pip = true
 
 [dependency-groups]
 dev = [

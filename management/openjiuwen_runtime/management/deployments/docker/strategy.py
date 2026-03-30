@@ -46,6 +46,7 @@ class DockerStrategy(BaseDeploymentStrategy[DockerInfo]):
             "container_name": kwargs.get("container_name"),
             "image": kwargs.get("image"),
             "whl_path": whl_path,
+            "ir_path": kwargs.get("ir_path"),
             "package_name": package_name,
             "created_at": now,
             "updated_at": now,
@@ -67,6 +68,7 @@ class DockerStrategy(BaseDeploymentStrategy[DockerInfo]):
             ),
             params=DockerParams(
                 whl_path=data.get("whl_path"),
+                ir_path=data.get("ir_path"),
                 package_name=data.get("package_name"),
                 container_name=data.get("container_name"),
                 image=data.get("image"),

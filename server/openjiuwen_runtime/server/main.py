@@ -6,6 +6,7 @@ FastAPI 服务器，提供 Agent 部署管理 REST API（支持租户隔离）
 import os
 import logging
 import tempfile
+import uuid
 from pathlib import Path
 from .config import settings
 
@@ -18,6 +19,7 @@ from openjiuwen_runtime.management.models.enums import DeploymentType, Deploymen
 from openjiuwen_runtime.foundation.db.sqlite_handler import SQLiteHandler
 from openjiuwen_runtime.foundation.db.mysql_handler import MySQLHandler
 from openjiuwen_runtime.foundation.port_utils import allocate_port, is_port_available
+from openjiuwen_runtime.foundation.deploy_utils import get_deploy_dir, get_dist_dir
 from .middleware.tenant import TenantContextMiddleware, get_tenant_context
 
 AGENT_NAME = "packed_agent.py"
@@ -93,13 +95,17 @@ async def deploy_agent(
     user_id, space_id = get_tenant_context(request)
     logger.info(f"Received agent deploy request: user_id={user_id}, space_id={space_id}, name={name}, userdata={mask_userdata(userdata)}")
 
-    # 保存上传的 JSON 文件到临时目录
+    deployment_id = str(uuid.uuid4())
+    logger.info(f"Generated deployment_id: {deployment_id}")
+
+    # 保存上传的 JSON 文件到部署目录下
+    deploy_dir = get_deploy_dir(deployment_id)
+    json_file_path = deploy_dir / "ir.json"
     content = await file.read()
-    with tempfile.NamedTemporaryFile(mode='wb', suffix='.json', delete=False) as tmp_file:
-        tmp_file.write(content)
-        json_file_path = tmp_file.name
+    json_file_path.write_bytes(content)
 
     try:
+        whl_path=""
         # 2. 端口分配和验证
         if mode == "subprocess":
             if port is None:
@@ -113,18 +119,20 @@ async def deploy_agent(
                 )
             logger.info(f"Port: {port}")
 
-        # 3. 使用预编译的 whl 包路径
-        whl_path = Path(__file__).parent.parent.parent / "dist" / "lowcode_agent_runner-0.1.0-py3-none-any.whl"
-        if not whl_path.exists():
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"WHL file not found: {whl_path}"
-            )
-        logger.info(f"Using WHL: {whl_path}")
+            dist_dir = get_dist_dir()
+            logger.info(f"dist_path: {dist_dir}")
+
+            whl_path = Path(dist_dir) / "lowcode_agent_runner-0.1.0-py3-none-any.whl"
+            if not whl_path.exists():
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=f"WHL file not found: {whl_path}"
+                )
+            logger.info(f"Using WHL: {whl_path}")
 
         # 4. 调用 Manager SDK 部署（传入 ir_path、whl_path 和 userdata）
         result = await manager.deploy_agent(
-            name=AGENT_NAME,
+            name=name,
             version="1.0.0",
             user_id=user_id,  # 注入租户信息
             space_id=space_id,  # 注入租户信息
@@ -132,12 +140,13 @@ async def deploy_agent(
             whl_path=str(whl_path),  # 预编译的 whl 包路径
             mode=DeployMode(mode),
             port=port,
+            deployment_id=deployment_id,
             data={"userdata": userdata} if userdata else None,  # 用户自定义数据
         )
 
         # 5. 过滤内部实现细节，只返回用户需要的信息
         response = {
-            "deployment_id": result.deployment_id,
+            "deployment_id": deployment_id,
             "type": result.deployment_type.value,
             "name": result.name,
             "status": result.deployment_status.value,
@@ -155,11 +164,6 @@ async def deploy_agent(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Deployment failed: {str(e)}"
     )
-    finally:
-        # 清理临时文件
-        if 'json_file_path' in locals() and Path(json_file_path).exists():
-            Path(json_file_path).unlink()
-
 
 
 @app.get("/api/v1/agents")
@@ -263,4 +267,6 @@ async def delete_agent(request: Request, deployment_id: str):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8100)
+    host = os.getenv("HOST", "0.0.0.0")
+    port = int(os.getenv("PORT", 8186))
+    uvicorn.run(app, host=host, port=port)

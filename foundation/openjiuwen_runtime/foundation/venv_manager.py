@@ -8,6 +8,8 @@ import os
 from pathlib import Path
 from typing import Optional
 
+from .deploy_utils import get_deploy_dir
+
 logger = logging.getLogger(__name__)
 
 
@@ -17,17 +19,18 @@ class VirtualEnvironmentManager:
 
     负责为每个部署创建、管理和清理独立的虚拟环境。
     """
-
-    def __init__(self, venvs_root: str = "./venvs"):
+    def get_venv_path(self, deployment_id: str) -> Path:
         """
-        初始化虚拟环境管理器
+        根据部署ID获取虚拟环境路径
 
         Args:
-            venvs_root: 虚拟环境根目录路径
+            deployment_id: 部署ID
+
+        Returns:
+            虚拟环境根目录路径
         """
-        self.venvs_root = Path(venvs_root).resolve()
-        self.venvs_root.mkdir(parents=True, exist_ok=True)
-        logger.info(f"VirtualEnvironmentManager initialized with root: {self.venvs_root}")
+        return get_deploy_dir(deployment_id)/".venv"
+
 
     def create_venv(self, deployment_id: str) -> Path:
         """
@@ -42,7 +45,7 @@ class VirtualEnvironmentManager:
         Raises:
             RuntimeError: 虚拟环境创建失败
         """
-        venv_path = self.venvs_root / deployment_id
+        venv_path = self.get_venv_path(deployment_id)
 
         if venv_path.exists():
             logger.info(f"Virtual environment already exists: {venv_path}")
@@ -65,11 +68,11 @@ class VirtualEnvironmentManager:
                 logger.error(f"Virtual environment directory not created: {venv_path}")
                 raise RuntimeError(f"Failed to create venv: directory not created")
 
+            python_exe = self.get_python_executable(deployment_id)
+
             if sys.platform == "win32":
-                python_exe = venv_path / "Scripts" / "python.exe"
                 pip_exe = venv_path / "Scripts" / "pip.exe"
             else:
-                python_exe = venv_path / "bin" / "python"
                 pip_exe = venv_path / "bin" / "pip"
 
             if not python_exe.exists():
@@ -100,7 +103,6 @@ class VirtualEnvironmentManager:
             logger.error(f"Failed to create virtual environment: {e.stderr}")
             raise RuntimeError(f"Failed to create venv: {e}")
 
-
     def get_python_executable(self, deployment_id: str) -> Path:
         """
         获取虚拟环境中的Python可执行文件路径
@@ -114,7 +116,7 @@ class VirtualEnvironmentManager:
         Raises:
             RuntimeError: Python可执行文件未找到
         """
-        venv_path = self.venvs_root / deployment_id
+        venv_path = self.get_venv_path(deployment_id)
 
         if not venv_path.exists():
             raise RuntimeError(f"Virtual environment not found: {venv_path}")
@@ -130,6 +132,7 @@ class VirtualEnvironmentManager:
             raise RuntimeError(f"Python executable not found: {python_path}")
 
         return python_path
+
 
     def install_whl(self, deployment_id: str, whl_path: str) -> bool:
         """
@@ -159,7 +162,7 @@ class VirtualEnvironmentManager:
 
         try:
             env = os.environ.copy()
-            env["VIRTUAL_ENV"] = str(self.venvs_root / deployment_id)
+            env["VIRTUAL_ENV"] = str(self.get_venv_path(deployment_id))
             result = subprocess.run(
                 cmd,
                 env=env,
@@ -207,7 +210,7 @@ class VirtualEnvironmentManager:
         Returns:
             是否删除成功
         """
-        venv_path = self.venvs_root / deployment_id
+        venv_path = self.get_venv_path(deployment_id)
 
         if not venv_path.exists():
             logger.warning(f"Virtual environment not found: {venv_path}")
@@ -222,16 +225,3 @@ class VirtualEnvironmentManager:
         except Exception as e:
             logger.error(f"Failed to delete virtual environment: {e}")
             return False
-
-    def venv_exists(self, deployment_id: str) -> bool:
-        """
-        检查虚拟环境是否存在
-
-        Args:
-            deployment_id: 部署ID
-
-        Returns:
-            虚拟环境是否存在
-        """
-        venv_path = self.venvs_root / deployment_id
-        return venv_path.exists()

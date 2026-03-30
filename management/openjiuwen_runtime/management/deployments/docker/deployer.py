@@ -11,6 +11,7 @@ import asyncio
 import logging
 import os
 import subprocess
+import shutil
 from pathlib import Path
 from typing import Optional
 
@@ -18,6 +19,8 @@ from ..base.deployer import Deployer
 from ..base.models import DeployContext, DeployResult
 from .models import DockerParams
 from ...models.enums import DeploymentStatus
+
+from openjiuwen_runtime.foundation.deploy_utils import get_deploy_dir
 
 logger = logging.getLogger(__name__)
 
@@ -29,14 +32,11 @@ class DockerDeployer(Deployer[DockerParams]):
             self,
             default_host: str = "localhost",
             docker_host: Optional[str] = None,
-            deploy_dir: Optional[str] = None,
     ):
         self.default_host = default_host
         self.docker_host = docker_host
-        self.deploy_dir = Path(deploy_dir or os.getenv("DEPLOY_DIR", "./.deploys")).resolve()
-        self.deploy_dir.mkdir(parents=True, exist_ok=True)
         self._containers: dict[str, str] = {}
-        logger.debug(f"DockerDeployer initialized: docker_host={docker_host}, deploy_dir={self.deploy_dir}")
+        logger.debug(f"DockerDeployer initialized: docker_host={docker_host}")
 
     def _build_docker_command(self, *args: str) -> list[str]:
         """构建 Docker 命令"""
@@ -62,44 +62,70 @@ class DockerDeployer(Deployer[DockerParams]):
             return True, stdout.decode().strip()
         return False, stderr.decode().strip()
 
-    def _generate_dockerfile(self, whl_path: str, package_name: str, port: str) -> str:
-        """生成 Dockerfile"""
-        whl_name = Path(whl_path).name
-        base_image =os.getenv("BASE_IMAGE", "swr.cn-north-4.myhuaweicloud.com/openjiuwen/studio-python-tool-amd64:0.1.0")
-        logger.debug(f"whl_name: {whl_name}")
 
-        return f"""ARG BASE_IMAGE
-FROM {base_image}
+    async def deploy_lowcode_container(
+        self,
+        container_name: str,
+        env_vars: dict,
+        volumes: list,
+        port: str,
+        ir_source_path: str
+    ) -> str:
+        """
+        创建低代码Agent容器：采用 docker create → docker cp → docker start 流程。
 
-ARG WHL_FILE="{whl_name}"
-ARG PACKAGE_NAME="{package_name}"
+        规避问题：
+            禁止使用 docker run -v 挂载容器内文件。
+            因如果当前服务运行于容器中，需要挂载/var/run/docker.sock，
+            所有挂载路径均指向宿主机，直接挂载容器内文件会导致目标文件被创建为空目录。
+        """
+        # 创建容器（不启动）
+        create_args = ["create", "--name", container_name]
 
-RUN mkdir -p /app/dist
-RUN useradd --create-home --shell /bin/bash app
-RUN chown -R app:app /app
+        # 环境变量
+        if env_vars:
+            for k, v in env_vars.items():
+                create_args.extend(["-e", f"{k}={v}"])
 
-USER app
-# Copy Python packages from builder stage
-COPY {whl_name} /app/dist
-RUN pip3 install /app/dist/{whl_name} --target=/app/site-packages --retries=5 --timeout=120
+        # 挂载卷
+        if volumes:
+            for vol in volumes:
+                if "source" in vol and "target" in vol:
+                    create_args.extend(["-v", f"{vol['source']}:{vol['target']}"])
 
-ENV PYTHONPATH=/app/site-packages
-ENV PACKAGE_NAME={package_name}
+        create_args.extend(["-p", port])
 
-WORKDIR /app
+        # 镜像
+        image_name = os.getenv("LOWCODE_IMAGE")
+        if not image_name:
+            raise RuntimeError("Environment variable LOWCODE_IMAGE is not set")
+        create_args.append(image_name)
 
-# Start the application
-CMD python -m {package_name} --host 0.0.0.0 --port {port}
-"""
+        logger.debug(f"Creating lowcode agent container: {container_name}")
+        success, output = await self._run_docker_command(*create_args)
+        if not success:
+            raise RuntimeError(f"create lowcode container failed: {output}")
+
+        container_id = output.strip()
+        logger.debug(f"container created: {container_id}")
+
+        # 复制 ir.json 到容器
+        target_path = f"{container_name}:/app/ir.json"
+        logger.debug(f"docker cp {ir_source_path} -> {target_path}")
+        success, cp_out = await self._run_docker_command("cp", ir_source_path, target_path)
+        if not success:
+            raise RuntimeError(f"docker cp failed: {cp_out}")
+
+        # 启动容器
+        logger.debug(f"Start container: {container_name}")
+        success, start_out = await self._run_docker_command("start", container_id)
+        if not success:
+            raise RuntimeError(f"Start container failed: {start_out}")
+
+        return container_id
 
     async def deploy(self, ctx: DeployContext[DockerParams]) -> DeployResult:
         """使用 Docker 容器部署应用
-
-        流程:
-        1. 生成 Dockerfile
-        2. 构建 Docker 镜像
-        3. 运行 Docker 容器
-
         Args:
             ctx: 部署上下文参数
 
@@ -112,6 +138,7 @@ CMD python -m {package_name} --host 0.0.0.0 --port {port}
         try:
             docker_params = ctx.params or DockerParams()
             whl_path = docker_params.whl_path
+            ir_path = docker_params.ir_path
             package_name = docker_params.package_name
             container_name = docker_params.container_name or f"deploy_{deployment_id}"
             env_vars = docker_params.env_vars
@@ -119,72 +146,24 @@ CMD python -m {package_name} --host 0.0.0.0 --port {port}
             host = ctx.host or self.default_host
             iport = "8090"
 
-            if not whl_path:
-                raise RuntimeError("whl_path is required for docker deployment")
-            if not package_name:
-                raise RuntimeError("package_name is required for docker deployment")
+            import json
+            logger.debug(f"docker_params 完整内容: \n{json.dumps(docker_params.__dict__, indent=2, ensure_ascii=False)}")
 
-            # 1. 生成 Dockerfile
-            dockerfile_content = self._generate_dockerfile(whl_path, package_name, iport)
+            # 非低码情况
+            if not ir_path:
+                if not whl_path:
+                    raise RuntimeError("whl_path is required for docker deployment")
+                if not package_name:
+                    raise RuntimeError("package_name is required for docker deployment")
 
-            # 使用指定目录：DEPLOY_DIR/deployment_id/
-            deploy_context_dir = self.deploy_dir / deployment_id
-            deploy_context_dir.mkdir(parents=True, exist_ok=True)
-            logger.debug(f"Using deploy context directory: {deploy_context_dir}")
-
-            dockerfile_path = deploy_context_dir / "Dockerfile"
-            dockerfile_path.write_text(dockerfile_content)
-
-            # 复制 WHL 文件到部署目录
-            whl_file = Path(whl_path)
-            if whl_file.exists():
-                import shutil
-                shutil.copy(whl_path, deploy_context_dir)
-            else:
-                raise RuntimeError(f"WHL file not found: {whl_path}")
-
-            # 2. 构建 Docker 镜像
-            image_name = f"{deployment_id}:latest"
-            logger.debug(f"Building docker image: image_name={image_name}")
-
-            success, output = await self._run_docker_command(
-                "build", "-t", image_name, str(deploy_context_dir)
+            # 创建并启动低代码Agent容器
+            container_id = await self.deploy_lowcode_container(
+                container_name=container_name,
+                env_vars=env_vars,
+                volumes=volumes,
+                port=iport,
+                ir_source_path=ir_path
             )
-
-            if not success:
-                logger.error(f"Docker build failed: deployment_id={deployment_id}, error={output}")
-                return DeployResult(
-                    success=False,
-                    deployment_id=deployment_id,
-                    message=f"Docker build failed: {output}"
-                )
-
-            # 3. 运行 Docker 容器
-            run_args = ["run", "-d", "--name", container_name]
-
-            if env_vars:
-                for key, value in env_vars.items():
-                    run_args.extend(["-e", f"{key}={value}"])
-
-            if volumes:
-                for vol in volumes:
-                    if "source" in vol and "target" in vol:
-                        run_args.extend(["-v", f"{vol['source']}:{vol['target']}"])
-
-            run_args.extend(["-p", iport, image_name])
-
-            logger.debug(f"Running docker container: container_name={container_name}, image={image_name}")
-            success, output = await self._run_docker_command(*run_args)
-
-            if not success:
-                logger.error(f"Docker run failed: deployment_id={deployment_id}, error={output}")
-                return DeployResult(
-                    success=False,
-                    deployment_id=deployment_id,
-                    message=f"Docker run failed: {output}"
-                )
-
-            container_id = output
             self._containers[deployment_id] = container_id
 
             # 获取该容器在宿主机上的port
@@ -239,20 +218,18 @@ CMD python -m {package_name} --host 0.0.0.0 --port {port}
                 logger.warning(f"Docker rm failed: deployment_id={deployment_id}, error={output}")
 
             # 删除镜像
-            image_name = f"{deployment_id}:latest"
-            success, output = await self._run_docker_command("rmi", image_name)
-            if not success:
-                logger.warning(f"Docker rmi failed: deployment_id={deployment_id}, error={output}")
+            # image_name = f"{deployment_id}:latest"
+            # success, output = await self._run_docker_command("rmi", image_name)
+            # if not success:
+            #    logger.warning(f"Docker rmi failed: deployment_id={deployment_id}, error={output}")
 
             if deployment_id in self._containers:
                 del self._containers[deployment_id]
 
             # 清理部署目录
-            deploy_context_dir = self.deploy_dir / deployment_id
-            if deploy_context_dir.exists():
-                import shutil
-                logger.debug(f"Cleaning deploy directory: {deploy_context_dir}")
-                shutil.rmtree(deploy_context_dir, ignore_errors=True)
+            deploy_context_dir = get_deploy_dir(deployment_id)
+            logger.debug(f"Cleaning deploy directory: {deploy_context_dir}")
+            shutil.rmtree(deploy_context_dir, ignore_errors=True)
 
             logger.info(f"Docker stopped: deployment_id={deployment_id}")
             return DeployResult(

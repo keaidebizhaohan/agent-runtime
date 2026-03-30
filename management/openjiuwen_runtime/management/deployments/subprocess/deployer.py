@@ -14,12 +14,15 @@ import shutil
 import subprocess
 import sys
 from typing import Dict, Optional
+from pathlib import Path
 
 from ..base.deployer import Deployer
 from ..base.models import DeployContext, DeployResult
 from .models import SubprocessParams
-from openjiuwen_runtime.foundation.venv_manager import VirtualEnvironmentManager
 from ...models.enums import DeploymentStatus
+
+from openjiuwen_runtime.foundation.venv_manager import VirtualEnvironmentManager
+from openjiuwen_runtime.foundation.deploy_utils import get_deploy_dir, get_dist_dir
 
 logger = logging.getLogger(__name__)
 
@@ -31,14 +34,11 @@ class LocalSubprocessDeployer(Deployer[SubprocessParams]):
             self,
             default_host: str = "127.0.0.1",
             default_port_start: int = 8000,
-            venv_base_path: str = "./venvs",
     ):
         self.default_host = default_host
         self.default_port_start = default_port_start
-        self.venv_base_path = venv_base_path
-        self.venv_manager = VirtualEnvironmentManager(venv_base_path)
+        self.venv_manager = VirtualEnvironmentManager()
         self._processes: Dict[str, asyncio.subprocess.Process] = {}
-        logger.debug(f"LocalSubprocessDeployer initialized: venv_base_path={venv_base_path}")
 
     def _kill_by_pid(self, pid: int) -> bool:
         """通过 PID 终止进程（跨进程有效）"""
@@ -127,23 +127,27 @@ class LocalSubprocessDeployer(Deployer[SubprocessParams]):
             else:
                 package_name = subprocess_params.package_name
 
-            # 1. 创建虚拟环境
+            # 创建虚拟环境
             venv_path = self.venv_manager.create_venv(deployment_id)
             logger.info(f"Virtual environment created: {venv_path}")
 
-            # 2. 如果有 ir_path，拷贝到虚拟环境
-            venv_ir_path = None
-            if ir_path:
-                import shutil
-                venv_ir_path = os.path.join(venv_path, os.path.basename(ir_path))
-                shutil.copy2(ir_path, venv_ir_path)
-                logger.info(f"IR file copied to venv: {ir_path} -> {venv_ir_path}")
+            # 优先读取环境变量，未配置则使用原始默认路径
+            dist_path = get_dist_dir()
+            logger.info(f"dist_path: {dist_path}")
 
-            # 3. 安装WHL包
-            self.venv_manager.install_whl(deployment_id, whl_path)
-            logger.info(f"WHL package installed: {whl_path}")
+            # 获取所有 .whl 文件
+            whl_files = list(dist_path.glob("*.whl"))
+            if not whl_files:
+                raise RuntimeError(f"No .whl files found in dist directory: {dist_path}")
 
-            # 4. 获取虚拟环境Python解释器
+            logger.info(f"whl_files: {whl_files}")
+
+            # 循环安装所有 whl 包
+            for whl_file in whl_files:
+                self.venv_manager.install_whl(deployment_id, str(whl_file))
+                logger.info(f"Installed WHL package: {whl_file}")
+
+            # 获取虚拟环境Python解释器
             python_executable = self.venv_manager.get_python_executable(deployment_id)
 
             # 5. 构建启动命令: python -m name --host --port [--irpath ir_path] [--userdata userdata]
@@ -157,8 +161,8 @@ class LocalSubprocessDeployer(Deployer[SubprocessParams]):
                 "--host", "0.0.0.0",
                 "--port", str(ctx.port)
             ]
-            if venv_ir_path:
-                cmd.extend(["--irpath", venv_ir_path])
+            if ir_path:
+                cmd.extend(["--irpath", ir_path])
             if userdata:
                 cmd.extend(["--userdata", userdata])
                 # 不记录完整 userdata 值，避免泄露敏感信息或日志混乱

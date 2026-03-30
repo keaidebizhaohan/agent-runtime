@@ -17,6 +17,7 @@ class DockerParams:
     env_vars: Optional[dict[str, str]] = None
     volumes: Optional[list[dict[str, str]]] = None
     whl_path: Optional[str] = None
+    ir_path: Optional[str] = None
     package_name: Optional[str] = None
     port: Optional[int] = None
 
@@ -33,6 +34,7 @@ class DockerInfo(BaseModel):
     container_name: Optional[str] = None
     image: Optional[str] = None
     whl_path: Optional[str] = None
+    ir_path: Optional[str] = None
     package_name: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
@@ -53,6 +55,7 @@ class DockerCreate(BaseModel):
     container_name: Optional[str] = Field(None, description="容器名称")
     image: Optional[str] = Field(None, description="镜像名称")
     whl_path: Optional[str] = Field(None, description="WHL包路径")
+    ir_path: Optional[str] = Field(None, description="IR文件路径")
     package_name: Optional[str] = Field(None, description="包名称")
     data: Optional[dict[str, Any]] = Field(None, description="扩展数据")
 
@@ -70,6 +73,7 @@ DOCKER_TABLE_DEF = TableDefinition(
         ColumnDefinition("container_name", "string", length=255, nullable=True),
         ColumnDefinition("image", "string", length=512, nullable=True),
         ColumnDefinition("whl_path", "string", length=512, nullable=True),
+        ColumnDefinition("ir_path", "string", length=512, nullable=True),
         ColumnDefinition("package_name", "string", length=255, nullable=True),
         ColumnDefinition("created_at", "datetime", nullable=False),
         ColumnDefinition("updated_at", "datetime", nullable=False),

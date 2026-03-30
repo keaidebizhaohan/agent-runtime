@@ -170,7 +170,7 @@ class DeploymentManager:
         deployment_id = kwargs.pop("deployment_id", None) or self._generate_deployment_id()
         now = datetime.utcnow()
 
-        logger.debug(f"Creating deployment record: deployment_id={deployment_id}, type={deployment_type}, name={name}")
+        logger.debug(f"deployment_id={deployment_id}, type={deployment_type}, name={name}")
 
         create_model = DeploymentCreate(
             deployment_id=deployment_id,
