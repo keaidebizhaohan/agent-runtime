@@ -94,20 +94,20 @@ def _setup_logging():
 
     # 配置 root logger
     logger = logging.getLogger("lowcode_agent")
-    logger.setLevel(logging.INFO)
+    logger.setLevel(logging.DEBUG)
 
     # 避免重复添加 handler
     if not logger.handlers:
         # 文件 handler
         file_handler = logging.FileHandler(log_file, encoding='utf-8')
-        file_handler.setLevel(logging.INFO)
+        file_handler.setLevel(logging.DEBUG)
         file_formatter = logging.Formatter(log_format, datefmt=date_format)
         file_handler.setFormatter(file_formatter)
         logger.addHandler(file_handler)
 
         # 控制台 handler
         console_handler = logging.StreamHandler(sys.stdout)
-        console_handler.setLevel(logging.INFO)
+        console_handler.setLevel(logging.DEBUG)
         console_formatter = logging.Formatter(log_format, datefmt=date_format)
         console_handler.setFormatter(console_formatter)
         logger.addHandler(console_handler)
@@ -130,7 +130,7 @@ def _setup_logging():
             oj_logger = logging.getLogger(logger_name)
             # 添加文件 handler（不添加控制台 handler，避免重复输出）
             oj_logger.addHandler(file_handler)
-            oj_logger.setLevel(logging.INFO)
+            oj_logger.setLevel(logging.DEBUG)
 
         logger.info("=" * 60)
         logger.info(f"Lowcode Agent Runner 启动")
@@ -245,6 +245,7 @@ async def query(msgs, request) -> AsyncIterator[Tuple[dict, bool]]:
         ):
             if chunk:
                 chunk_count += 1
+                logger.debug(f"[chunk #{chunk_count}] type={type(chunk).__name__}, content={chunk}")
                 events = convert_chunk_to_agui_events(
                     chunk=chunk,
                     trace_context=trace_context,
