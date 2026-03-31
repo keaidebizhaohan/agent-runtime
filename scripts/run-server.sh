@@ -5,6 +5,7 @@ ENV_FILE=${SERVER_DIR}/.env
 cd ${PROJECT_DIR}
 # git checkout develop
 git submodule update --init --recursive
+git submodule update --remote --recursive
 
 rm -rf ${PROJECT_DIR}/dist
 mkdir ${PROJECT_DIR}/dist
