@@ -23,6 +23,7 @@ from ...models.enums import DeploymentStatus
 
 from openjiuwen_runtime.foundation.venv_manager import VirtualEnvironmentManager
 from openjiuwen_runtime.foundation.deploy_utils import get_deploy_dir, get_dist_dir
+from openjiuwen_runtime.foundation.log.utils import mask_userdata, mask_cmd
 
 logger = logging.getLogger(__name__)
 
@@ -165,10 +166,8 @@ class LocalSubprocessDeployer(Deployer[SubprocessParams]):
                 cmd.extend(["--irpath", ir_path])
             if userdata:
                 cmd.extend(["--userdata", userdata])
-                # 不记录完整 userdata 值，避免泄露敏感信息或日志混乱
-                safe_userdata_preview = userdata[:50] + "..." if len(userdata) > 50 else userdata
-                logger.info(f"Using userdata: {safe_userdata_preview}")
-            logger.debug(f"Command: {cmd}")
+                logger.info(f"Using userdata: {mask_userdata(userdata)}")
+            logger.debug(f"Command: {mask_cmd(cmd)}")
 
             # 6. 启动进程 (Windows: 使用新进程组，避免Ctrl+C影响子进程)
             creation_flags = 0
