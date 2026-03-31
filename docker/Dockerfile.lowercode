@@ -60,4 +60,4 @@ HEALTHCHECK --interval=30s --timeout=30s --start-period=30s --retries=5 \
 
 WORKDIR /app/
 ENV PYTHONPATH=/app/site-packages/openjiuwen_runtime:/app/site-packages
-CMD ["python", "-m", "openjiuwen_runtime.examples.lowcode_agent", "--host", "0.0.0.0", "--port", "8090", "--file", "/app/ir.json"]
+CMD ["python", "-m", "openjiuwen_runtime.examples.lowcode_agent", "--host", "0.0.0.0", "--port", "8090", "--irpath", "/app/ir.json"]
