@@ -136,7 +136,7 @@ async def deploy_agent(
             version="1.0.0",
             user_id=user_id,  # 注入租户信息
             space_id=space_id,  # 注入租户信息
-            ir_path=json_file_path,  # 用户上传的 JSON 配置文件路径
+            ir_path=str(json_file_path),  # 用户上传的 JSON 配置文件路径
             whl_path=str(whl_path),  # 预编译的 whl 包路径
             mode=DeployMode(mode),
             port=port,

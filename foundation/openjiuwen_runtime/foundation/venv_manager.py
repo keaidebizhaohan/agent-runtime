@@ -5,9 +5,9 @@ import shutil
 import subprocess
 import sys
 import os
+import shlex
 from pathlib import Path
 from typing import Optional
-
 from .deploy_utils import get_deploy_dir
 
 logger = logging.getLogger(__name__)
@@ -152,11 +152,14 @@ class VirtualEnvironmentManager:
 
         logger.info(f"Installing WHL package: {whl_path} into {deployment_id}")
 
+        uv_extra_args_list  = shlex.split(os.getenv("UV_EXTRA_ARGS", "").strip())
+
         # 使用 uv pip 安装包，通过虚拟环境路径指定目标环境
         cmd = [
             "uv", "pip", "install",
             whl_path,
-            "--python", str(python_executable)
+            "--python", str(python_executable),
+            *uv_extra_args_list
         ]
         logger.debug(f"Command: {' '.join(cmd)}")
 
