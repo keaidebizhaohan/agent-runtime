@@ -4,11 +4,7 @@ ENV_FILE=${SERVER_DIR}/.env
 
 cd ${PROJECT_DIR}
 # git checkout develop
-if [ ! -d "agent-studio" ]; then
-    git submodule update --init --recursive
-else
-    echo "==> agent-studio already exist, skip pull."
-fi
+git submodule update --init --recursive
 
 rm -rf ${PROJECT_DIR}/dist
 mkdir ${PROJECT_DIR}/dist
