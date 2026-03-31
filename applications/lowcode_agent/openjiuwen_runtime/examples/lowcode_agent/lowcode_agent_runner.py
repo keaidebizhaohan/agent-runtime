@@ -124,6 +124,7 @@ def _setup_logging():
             "memory",        # 内存管理日志
             "retrieval",     # 检索日志
             "context_engine",# 上下文引擎日志
+            "openjiuwen_runtime.service.app.agent_app",  # AgentApp /query 异常日志
         ]
 
         for logger_name in openjiuwen_loggers:

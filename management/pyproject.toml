@@ -14,20 +14,17 @@ dependencies = [
     # config
     "pyyaml>=6.0",
     # db
-    "sqlalchemy>=2.0.0",
-    "pymysql>=1.0.0",
+    "sqlalchemy==2.0.48",
+    "pymysql==1.1.1",
     "cryptography>=42.0.0",
-    "pydantic>=2.0.0",
-    "pydantic-settings>=2.0.0",
-    "sqlalchemy>=2.0.0",
-    "aiomysql>=0.2.0",
-    "aiosqlite>=0.19.0",
-    "redis>=5.0.0",
+    "pydantic==2.11.7",
+    "pydantic-settings==2.5.2",
+    "aiomysql==0.2.0",
+    "aiosqlite==0.21.0",
+    "redis==7.1.0",
     # lint
     "ruff==0.9.10",
     # local dependency
-    # "openjiuwen-runtime-foundation @ file:///${PROJECT_ROOT}/../foundation",
-    "openjiuwen-runtime-foundation==0.0.1",
 ]
 
 [tool.uv]

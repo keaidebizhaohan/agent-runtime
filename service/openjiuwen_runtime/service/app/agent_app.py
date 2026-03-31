@@ -10,6 +10,7 @@ AgentApp - Agent 应用类
 import json
 import asyncio
 import inspect
+import logging
 from typing import Callable, Optional, AsyncIterator, Tuple, Dict, Any
 from fastapi import Request, HTTPException
 from fastapi.responses import StreamingResponse
@@ -17,6 +18,8 @@ from fastapi.responses import StreamingResponse
 from .base_app import BaseApp
 from .middleware import Middleware, MiddlewareContext
 from ..models.request import QueryRequest, ResetConversationRequest
+
+logger = logging.getLogger(__name__)
 
 
 class AgentApp(BaseApp):
@@ -178,13 +181,22 @@ class AgentApp(BaseApp):
                                 pass
                     except Exception as e:
                         error_occurred = True
+                        logger.error(
+                            f"Query execution failed - conversation_id: {query_request.conversation_id}, error: {e}",
+                            exc_info=True,
+                        )
                         # 发生异常时调用 on_error 方法
                         for mw in self._middlewares:
                             try:
                                 await mw.on_error(processed_messages, query_request, e, context)
                             except Exception:
                                 pass
-                        raise
+                        # 将异常作为错误事件返回给客户端，而不是 raise 导致进程崩溃
+                        error_event = {
+                            "type": "error",
+                            "error": str(e),
+                        }
+                        yield f"data: {json.dumps(error_event)}\n\n"
 
             return StreamingResponse(
                 generate(),
