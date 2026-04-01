@@ -164,10 +164,7 @@ class LocalSubprocessDeployer(Deployer[SubprocessParams]):
             ]
             if ir_path:
                 cmd.extend(["--irpath", ir_path])
-            if userdata:
-                cmd.extend(["--userdata", userdata])
-                logger.info(f"Using userdata: {mask_userdata(userdata)}")
-            logger.debug(f"Command: {mask_cmd(cmd)}")
+            logger.debug(f"Command: {cmd}")
 
             # 6. 启动进程 (Windows: 使用新进程组，避免Ctrl+C影响子进程)
             creation_flags = 0
@@ -176,6 +173,10 @@ class LocalSubprocessDeployer(Deployer[SubprocessParams]):
 
             env = os.environ.copy()
             env["VIRTUAL_ENV"] = str(venv_path)
+            # 通过环境变量传递 userdata，避免在 ps/任务管理器中泄露敏感信息
+            if userdata:
+                env["RUNTIME_USERDATA"] = userdata
+                logger.info(f"Using userdata: {mask_userdata(userdata)}")
 
             process = subprocess.Popen(
                 cmd,

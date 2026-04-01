@@ -31,6 +31,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# 追踪已分配的端口，防止并发部署时端口冲突
+_allocated_ports: set[int] = set()
+
 # 创建 FastAPI 应用
 app = FastAPI(
     title="Agent Runtime Manager API",
@@ -109,7 +112,8 @@ async def deploy_agent(
         # 2. 端口分配和验证
         if mode == "subprocess":
             if port is None:
-                port = allocate_port()
+                port = allocate_port(exclude_ports=_allocated_ports)
+                _allocated_ports.add(port)
                 logger.info(f"Auto-allocated port: {port}")
             elif not is_port_available(port):
                 logger.error(f"Port {port} is already in use")

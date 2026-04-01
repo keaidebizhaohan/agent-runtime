@@ -26,6 +26,7 @@ def _setup_runtime_env(kwargs: Dict[str, Any]) -> None:
     userdata = kwargs.pop("userdata", None)
     if userdata is not None:
         os.environ["RUNTIME_USERDATA"] = str(userdata)
+    # 如果 kwargs 中未传入，保留已有的环境变量（如由父进程注入）
 
     # 处理 file 参数，设置环境变量
     file_path = kwargs.pop("file", None)
