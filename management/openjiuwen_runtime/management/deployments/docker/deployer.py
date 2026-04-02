@@ -21,6 +21,7 @@ from .models import DockerParams
 from ...models.enums import DeploymentStatus
 
 from openjiuwen_runtime.foundation.deploy_utils import get_deploy_dir
+from openjiuwen_runtime.foundation.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -96,7 +97,7 @@ class DockerDeployer(Deployer[DockerParams]):
         create_args.extend(["-p", port])
 
         # 镜像
-        image_name = os.getenv("LOWCODE_IMAGE")
+        image_name = settings.LOWCODE_IMAGE
         if not image_name:
             raise RuntimeError("Environment variable LOWCODE_IMAGE is not set")
         create_args.append(image_name)
@@ -173,8 +174,7 @@ class DockerDeployer(Deployer[DockerParams]):
 
             # 解析输出 0.0.0.0:12345 → 拿到 12345
             port = port_output.strip().split(":")[-1]
-            ip=os.getenv("IP", "localhost")
-            url = f"http://{ip}:{port}"
+            url = f"http://{settings.IP}:{port}"
 
             logger.info(f"Docker deployed: deployment_id={deployment_id}, container={container_name}, url={url}")
             return DeployResult(

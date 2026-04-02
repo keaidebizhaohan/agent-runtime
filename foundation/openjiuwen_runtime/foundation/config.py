@@ -1,0 +1,73 @@
+"""Server Configuration"""
+import os
+from typing import Optional, Literal
+from pathlib import Path
+from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field, model_validator
+
+# 定义项目根目录
+PROJECT_ROOT = Path(__file__).parents[3].resolve()
+
+
+class Settings(BaseSettings):
+    # --------------------------
+    # 【基础配置】
+    # --------------------------
+    DB_TYPE: Literal["mysql", "sqlite"] = Field(default="sqlite", env="DB_TYPE")
+
+
+    # --------------------------
+    # 【MySQL 配置】（静态可选，DB_TYPE=mysql 时必选）
+    # --------------------------
+    DB_HOST: Optional[str] = Field(default=None, env="DB_HOST")
+    DB_PORT: Optional[int] = Field(default=None, env="DB_PORT")
+    DB_USER: Optional[str] = Field(default=None, env="DB_USER")
+    DB_PASSWORD: Optional[str] = Field(default=None, env="DB_PASSWORD")
+    DB_NAME: Optional[str] = Field(default=None, env="DB_NAME")
+
+    # --------------------------
+    # 【服务配置】
+    # --------------------------
+    # ✅【必选配置】
+    IP: str = Field(env="IP")
+    LOWCODE_IMAGE: str = Field(env="LOWCODE_IMAGE")
+
+    # 可选配置
+    DEPLOY_DIR: str = Field(default="/tmp/deploys", env="DEPLOY_DIR")
+    DIST_DIR: str = Field(default="/tmp/dist", env="DIST_DIR")
+    HOST: str = Field(default="0.0.0.0", env="HOST")
+    PORT: int = Field(default="8186", env="PORT")
+    UV_EXTRA_ARGS: str = Field(default="", env="UV_EXTRA_ARGS")
+    DEPLOY_TYPE: Literal["subprocess", "docker", "k8s"] = Field(default="subprocess", env="DEPLOY_TYPE")
+
+    # ========================
+    # MySQL 动态必选校验
+    # ========================
+    @model_validator(mode="after")
+    def check_mysql_required(self) -> "Settings":
+        if self.DB_TYPE == "mysql":
+            missing = []
+            if not self.DB_HOST:
+                missing.append("DB_HOST")
+            if not self.DB_PORT:
+                missing.append("DB_PORT")
+            if not self.DB_USER:
+                missing.append("DB_USER")
+            if not self.DB_PASSWORD:
+                missing.append("DB_PASSWORD")
+            if not self.DB_NAME:
+                missing.append("DB_NAME")
+
+            if missing:
+                raise ValueError(f"When DB_TYPE=mysql, the following fields are required: {', '.join(missing)}")
+        return self
+
+    # 自动从 .env 读取
+    model_config = SettingsConfigDict(
+        env_file=os.path.join(PROJECT_ROOT, "server/.env"),
+        env_file_encoding="utf-8",
+        case_sensitive=True
+    )
+
+# 初始化配置
+settings = Settings()

@@ -24,6 +24,7 @@ from ...models.enums import DeploymentStatus
 from openjiuwen_runtime.foundation.venv_manager import VirtualEnvironmentManager
 from openjiuwen_runtime.foundation.deploy_utils import get_deploy_dir, get_dist_dir
 from openjiuwen_runtime.foundation.log.utils import mask_userdata, mask_cmd
+from openjiuwen_runtime.foundation.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -196,8 +197,7 @@ class LocalSubprocessDeployer(Deployer[SubprocessParams]):
                 logger.error(f"Process exited for {deployment_id}: {error_msg}")
                 raise RuntimeError(f"Process exited: {error_msg}")
 
-            ip=os.getenv("IP", "localhost")
-            url=f"http://{ip}:{str(ctx.port)}/"
+            url=f"http://{settings.IP}:{str(ctx.port)}/"
             logger.info(f"Deployment {deployment_id} succeeded, PID: {process.pid}, URL: {url}")
 
             return DeployResult(
