@@ -1,40 +1,31 @@
 # -*- coding: utf-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2025-2025. All rights reserved.
 
-"""`/execute_stream` 的 SSE 逻辑与 chunk→ResponseModel 映射。
-
-约定：
-- FastAPI 路由返回 EventSourceResponse；
-- 每个 SSE event 的 data 部分都是 `ResponseModel` 的 JSON 字符串；
-- code 统一使用 LowcodeApiResponseCode，data.type 使用 ResponseDataType。
-"""
+"""execute_stream 的 SSE 逻辑与 chunk 到 ResponseModel 的映射。"""
 
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 import logging
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator
 
 from dsl_workflow_dependency_loader import WorkflowLlmApiKeyMissingError
-from fastapi import HTTPException
 from fastapi.exceptions import RequestValidationError
 from openjiuwen.core.runner import Runner
 from openjiuwen_studio.schemas import ResponseModel
 
-from runtime_support.http_response_contract import LowcodeApiResponseCode, ResponseDataType
-from runtime_support.ir_fetch import (
-    detect_executable_kind,
-    ensure_ir_local_path,
-    lowcode_code_from_http_exception,
+from runtime_support.http_response_contract import (
+    LowcodeApiResponseCode,
+    ResponseDataType,
+    build_error_response_model,
+    to_jsonable,
 )
+from runtime_support.execution_request import ExecutionPrepareError, prepare_execution_request
 from runtime_support.runtime_bootstrap import ensure_runtime_ready
 
-# agent 构建与 JSON 序列化为公共能力
-from react_agent_builder import build_react_agent  # noqa: E402
-from invoke_api import _to_jsonable  # noqa: E402
+from react_agent_builder import build_react_agent_from_ir
 
 
 @asynccontextmanager
@@ -58,15 +49,7 @@ def _stream_error_event(
     message: str | None = None,
     payload: dict[str, Any] | None = None,
 ) -> str:
-    msg = message if message is not None else code.default_message
-    body: dict[str, Any] = {"message": msg}
-    if payload:
-        body.update(payload)
-    return ResponseModel(
-        code=int(code),
-        message=msg,
-        data={"type": ResponseDataType.ERROR.value, "payload": body},
-    ).model_dump_json()
+    return build_error_response_model(code, message=message, payload=payload).model_dump_json()
 
 
 def _stream_frame_message(code: LowcodeApiResponseCode, payload: Any) -> str:
@@ -81,7 +64,7 @@ def _stream_frame_message(code: LowcodeApiResponseCode, payload: Any) -> str:
 
 
 def _workflow_chunk_to_type_payload_code(chunk: Any) -> tuple[str | None, Any, LowcodeApiResponseCode]:
-    """Workflow.stream：chunk → (data.type, payload, code)；None 表示本帧丢弃。"""
+    """将 workflow stream chunk 映射为 data.type、payload 与业务 code。"""
     from openjiuwen.core.common.constants.constant import END_NODE_STREAM, INTERACTION
     from openjiuwen.core.session.stream import CustomSchema, OutputSchema, TraceSchema
     from openjiuwen.core.session.tracer.handler import TracerHandlerName
@@ -90,33 +73,31 @@ def _workflow_chunk_to_type_payload_code(chunk: Any) -> tuple[str | None, Any, L
     ok = LowcodeApiResponseCode.SUCCESS
 
     if isinstance(chunk, TraceSchema):
-        # TraceSchema 由 core 生成，payload 已是 JSON 友好结构；这里再 _to_jsonable 一次保证安全
         if chunk.type == TracerHandlerName.TRACER_WORKFLOW.value:
             if not include_trace:
                 return None, None, ok
-            return ResponseDataType.TRACE.value, _to_jsonable(chunk.payload), ok
+            return ResponseDataType.TRACE.value, to_jsonable(chunk.payload), ok
         if include_trace:
-            return ResponseDataType.TRACE.value, _to_jsonable(chunk.payload), ok
+            return ResponseDataType.TRACE.value, to_jsonable(chunk.payload), ok
         return None, None, ok
 
     if isinstance(chunk, OutputSchema):
         output_type = chunk.type
         if output_type == "output":
-            return ResponseDataType.NODE_OUTPUT.value, _to_jsonable(chunk.payload), ok
+            return ResponseDataType.NODE_OUTPUT.value, to_jsonable(chunk.payload), ok
         if output_type == END_NODE_STREAM:
-            return ResponseDataType.STREAM.value, _to_jsonable(chunk.payload), ok
+            return ResponseDataType.STREAM.value, to_jsonable(chunk.payload), ok
         if output_type == INTERACTION:
-            # 注意：workflow.stream 的 __interaction__ 对外暴露为 input_required（区别于 agent 的 interaction）
-            return ResponseDataType.INPUT_REQUIRED.value, _to_jsonable(chunk.payload), ok
+            return ResponseDataType.INPUT_REQUIRED.value, to_jsonable(chunk.payload), ok
         if output_type == "workflow_final":
-            return ResponseDataType.RESULT.value, _to_jsonable(chunk.payload), ok
-        return ResponseDataType.STREAM.value, _to_jsonable(chunk.payload), ok
+            return ResponseDataType.RESULT.value, to_jsonable(chunk.payload), ok
+        return ResponseDataType.STREAM.value, to_jsonable(chunk.payload), ok
 
     if isinstance(chunk, CustomSchema):
-        return ResponseDataType.STREAM.value, _to_jsonable(chunk.model_dump()), ok
+        return ResponseDataType.STREAM.value, to_jsonable(chunk.model_dump()), ok
     if isinstance(chunk, dict):
-        return ResponseDataType.STREAM.value, _to_jsonable(chunk), ok
-    return ResponseDataType.STREAM.value, _to_jsonable(chunk), ok
+        return ResponseDataType.STREAM.value, to_jsonable(chunk), ok
+    return ResponseDataType.STREAM.value, to_jsonable(chunk), ok
 
 
 def _agent_output_payload_dict(chunk: Any) -> dict[str, Any]:
@@ -134,8 +115,35 @@ def _agent_output_payload_dict(chunk: Any) -> dict[str, Any]:
     return {}
 
 
+def _agent_answer_chunk_to_type_payload_code(
+    chunk: Any,
+    payload_dict: dict[str, Any],
+    ok: LowcodeApiResponseCode,
+    fail: LowcodeApiResponseCode,
+) -> tuple[str | None, Any, LowcodeApiResponseCode]:
+    result_type = str(payload_dict.get("result_type") or "").strip()
+    if result_type == "error":
+        msg = payload_dict.get("message") or payload_dict.get("output") or ""
+        return ResponseDataType.ERROR.value, {"message": str(msg)}, fail
+    if result_type == "interrupt":
+        return (
+            ResponseDataType.INTERACTION.value,
+            {
+                "workflow_execution_state": to_jsonable(payload_dict.get("workflow_execution_state")),
+                "component_ids": to_jsonable(payload_dict.get("component_ids", [])),
+            },
+            ok,
+        )
+    if not result_type:
+        return ResponseDataType.UNKNOWN.value, to_jsonable(chunk.model_dump()), ok
+    if result_type == "answer":
+        out = payload_dict.get("output", "")
+        return ResponseDataType.RESULT.value, {"output": out if isinstance(out, str) else str(out)}, ok
+    return ResponseDataType.FORCE_FINISH.value, to_jsonable(chunk.model_dump()), ok
+
+
 def _agent_chunk_to_type_payload_code(chunk: Any) -> tuple[str | None, Any, LowcodeApiResponseCode]:
-    """Agent.stream：chunk → (data.type, payload, code)。"""
+    """将 agent stream chunk 映射为 data.type、payload 与业务 code。"""
     from openjiuwen.core.common.constants.constant import INTERACTION
     from openjiuwen.core.session.stream import CustomSchema, OutputSchema, TraceSchema
     from openjiuwen.core.session.tracer.handler import TracerHandlerName
@@ -148,9 +156,9 @@ def _agent_chunk_to_type_payload_code(chunk: Any) -> tuple[str | None, Any, Lowc
         if chunk.type in (TracerHandlerName.TRACE_AGENT.value, TracerHandlerName.TRACER_WORKFLOW.value):
             if not include_trace:
                 return None, None, ok
-            return ResponseDataType.TRACE.value, _to_jsonable(chunk.payload), ok
+            return ResponseDataType.TRACE.value, to_jsonable(chunk.payload), ok
         if include_trace:
-            return ResponseDataType.TRACE.value, _to_jsonable(chunk.payload), ok
+            return ResponseDataType.TRACE.value, to_jsonable(chunk.payload), ok
         return None, None, ok
 
     if isinstance(chunk, OutputSchema):
@@ -158,8 +166,7 @@ def _agent_chunk_to_type_payload_code(chunk: Any) -> tuple[str | None, Any, Lowc
         payload_dict = _agent_output_payload_dict(chunk)
 
         if output_type == INTERACTION:
-            # agent.stream 的 __interaction__ → interaction（payload 透传）
-            return ResponseDataType.INTERACTION.value, _to_jsonable(chunk.payload), ok
+            return ResponseDataType.INTERACTION.value, to_jsonable(chunk.payload), ok
 
         if output_type == "llm_reasoning":
             content = payload_dict.get("output") or payload_dict.get("content") or ""
@@ -170,36 +177,19 @@ def _agent_chunk_to_type_payload_code(chunk: Any) -> tuple[str | None, Any, Lowc
             return ResponseDataType.STREAM.value, {"content": content, "stream_type": "llm_output"}, ok
 
         if output_type == "answer":
-            result_type = str(payload_dict.get("result_type") or "").strip()
-            if result_type == "error":
-                msg = payload_dict.get("message") or payload_dict.get("output") or ""
-                return ResponseDataType.ERROR.value, {"message": str(msg)}, fail
-            if result_type == "interrupt":
-                return (
-                    ResponseDataType.INTERACTION.value,
-                    {
-                        "workflow_execution_state": _to_jsonable(payload_dict.get("workflow_execution_state")),
-                        "component_ids": _to_jsonable(payload_dict.get("component_ids", [])),
-                    },
-                    ok,
-                )
-            if not result_type:
-                return ResponseDataType.UNKNOWN.value, _to_jsonable(chunk.model_dump()), ok
-            if result_type == "answer":
-                out = payload_dict.get("output", "")
-                return ResponseDataType.RESULT.value, {"output": out if isinstance(out, str) else str(out)}, ok
-            return ResponseDataType.FORCE_FINISH.value, _to_jsonable(chunk.model_dump()), ok
+            return _agent_answer_chunk_to_type_payload_code(chunk, payload_dict, ok, fail)
 
         if output_type == "final" and payload_dict.get("error"):
+            # 兼容 llm_controller 的错误帧。当前 ReActAgent 主路径不会写这种类型。
             return ResponseDataType.ERROR.value, {"message": str(payload_dict.get("message", ""))}, fail
 
-        return ResponseDataType.STREAM.value, _to_jsonable(chunk.model_dump()), ok
+        return ResponseDataType.STREAM.value, to_jsonable(chunk.model_dump()), ok
 
     if isinstance(chunk, CustomSchema):
-        return ResponseDataType.STREAM.value, _to_jsonable(chunk.model_dump()), ok
+        return ResponseDataType.STREAM.value, to_jsonable(chunk.model_dump()), ok
     if isinstance(chunk, dict):
-        return ResponseDataType.STREAM.value, _to_jsonable(chunk), ok
-    return ResponseDataType.STREAM.value, _to_jsonable(chunk), ok
+        return ResponseDataType.STREAM.value, to_jsonable(chunk), ok
+    return ResponseDataType.STREAM.value, to_jsonable(chunk), ok
 
 
 async def _workflow_stream_event_source(chunk_stream: AsyncIterator[Any], timeout_seconds: float) -> AsyncIterator[str]:
@@ -279,7 +269,7 @@ async def _agent_stream_event_source(chunk_stream: AsyncIterator[Any], timeout_s
 
 
 async def validation_error_stream_events(exc: RequestValidationError) -> AsyncIterator[str]:
-    """SSE 路由的请求体校验失败也要走 ResponseModel 事件体。"""
+    """SSE 路由的请求体校验失败也返回 ResponseModel 事件体。"""
     yield _stream_error_event(
         LowcodeApiResponseCode.INVALID_REQUEST,
         message=LowcodeApiResponseCode.INVALID_REQUEST.default_message,
@@ -288,7 +278,7 @@ async def validation_error_stream_events(exc: RequestValidationError) -> AsyncIt
 
 
 async def execute_stream_event_source(body: Any) -> AsyncIterator[str]:
-    """FastAPI 路由层入口：POST /execute_stream."""
+    """FastAPI 路由层入口。"""
     try:
         await ensure_runtime_ready()
     except Exception as e:
@@ -296,68 +286,19 @@ async def execute_stream_event_source(body: Any) -> AsyncIterator[str]:
         return
 
     try:
-        ir_local_json_path = await ensure_ir_local_path(getattr(body, "ir_path"))
-    except HTTPException as he:
-        lc, msg = lowcode_code_from_http_exception(he)
-        yield _stream_error_event(lc, message=msg)
+        prepared = await prepare_execution_request(body)
+    except ExecutionPrepareError as exc:
+        yield _stream_error_event(exc.code, message=exc.message)
         return
 
-    try:
-        ir_root = json.loads(ir_local_json_path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        c = LowcodeApiResponseCode.IR_INVALID
-        yield _stream_error_event(c, message=f"{c.default_message}: {exc}")
-        return
-
-    try:
-        executable_kind = detect_executable_kind(ir_root)
-    except HTTPException as he:
-        lc, msg = lowcode_code_from_http_exception(he)
-        if he.status_code == 400 and "neither workflow" in (msg or "").lower():
-            lc = LowcodeApiResponseCode.IR_INVALID
-        yield _stream_error_event(lc, message=msg)
-        return
-
-    try:
-        inputs_obj = json.loads(getattr(body, "inputs"))
-    except json.JSONDecodeError as exc:
-        c = LowcodeApiResponseCode.INVALID_INPUTS
-        yield _stream_error_event(c, message=f"{c.default_message}: {exc}")
-        return
-    if not isinstance(inputs_obj, dict):
-        c = LowcodeApiResponseCode.INVALID_INPUTS
-        yield _stream_error_event(c, message="inputs must decode to a JSON object")
-        return
-
-    if executable_kind == "workflow" and set(inputs_obj.keys()) == {"__interactive_reply"}:
-        # 续跑输入：支持两种形态
-        # 1) {"__interactive_reply": "<text>"} -> InteractiveInput(raw_inputs="<text>")（兼容老约定）
-        # 2) {"__interactive_reply": {"id": "<node_id>", "value": <any>}} -> InteractiveInput().update(id, value)
-        from openjiuwen.core.session import InteractiveInput
-
-        reply = inputs_obj["__interactive_reply"]
-        if isinstance(reply, dict) and (reply.get("id") is not None):
-            ii = InteractiveInput()
-            ii.update(str(reply.get("id")), reply.get("value"))
-            inputs_obj = ii
-        else:
-            inputs_obj = InteractiveInput(reply)
-
-    space_id = os.environ.get("WORKFLOW_SPACE_ID", "default")
-    current_user = {"user_id": getattr(body, "user_id"), "space_id": space_id}
-    if executable_kind == "agent" and "user_id" not in inputs_obj:
-        inputs_obj = dict(inputs_obj)
-        inputs_obj["user_id"] = getattr(body, "user_id")
-
-    timeout_seconds = getattr(body, "timeout_ms") / 1000.0
-    session_id = getattr(body, "conversation_id")
-
-    if executable_kind == "workflow":
+    if prepared.executable_kind == "workflow":
         try:
             from workflow_ir_builder import build_core_workflow_from_ir_file
 
             workflow = await build_core_workflow_from_ir_file(
-                str(ir_local_json_path.resolve()), space_id=space_id, current_user=current_user
+                prepared.ir_local_json_path,
+                space_id=prepared.space_id,
+                current_user=prepared.current_user,
             )
         except WorkflowLlmApiKeyMissingError as e:
             yield _stream_error_event(LowcodeApiResponseCode.LLM_API_KEY_MISSING, message=str(e))
@@ -366,18 +307,26 @@ async def execute_stream_event_source(body: Any) -> AsyncIterator[str]:
             yield _stream_error_event(LowcodeApiResponseCode.IR_LOAD_FAILED, message=str(e))
             return
 
-        chunk_iterator = Runner.run_workflow_streaming(workflow=workflow, inputs=inputs_obj, session=session_id)
-        async for line in _workflow_stream_event_source(chunk_iterator, timeout_seconds):
+        chunk_iterator = Runner.run_workflow_streaming(
+            workflow=workflow,
+            inputs=prepared.inputs_obj,
+            session=prepared.session_id,
+        )
+        async for line in _workflow_stream_event_source(chunk_iterator, prepared.timeout_seconds):
             yield line
         return
 
     try:
-        react_agent = await build_react_agent(ir_local_json_path.resolve(), current_user)
+        react_agent = await build_react_agent_from_ir(prepared.ir_local_json_path, prepared.current_user)
     except Exception as e:
         yield _stream_error_event(LowcodeApiResponseCode.IR_LOAD_FAILED, message=str(e))
         return
 
-    chunk_iterator = Runner.run_agent_streaming(agent=react_agent, inputs=inputs_obj, session=session_id)
-    async for line in _agent_stream_event_source(chunk_iterator, timeout_seconds):
+    chunk_iterator = Runner.run_agent_streaming(
+        agent=react_agent,
+        inputs=prepared.inputs_obj,
+        session=prepared.session_id,
+    )
+    async for line in _agent_stream_event_source(chunk_iterator, prepared.timeout_seconds):
         yield line
 

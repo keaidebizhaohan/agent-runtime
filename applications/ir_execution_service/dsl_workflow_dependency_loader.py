@@ -10,13 +10,7 @@ DSL 工作流依赖解析：从导出 JSON 的 dependencies.workflows 解析子�
 
 from __future__ import annotations
 
-import os
-import re
-from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
-from urllib.parse import urlparse
-
-_APP_DIR = Path(__file__).resolve().parent
+from typing import Any, Dict, Tuple
 
 from openjiuwen.core.workflow.workflow import Workflow as InvokableWorkflow
 from openjiuwen_studio.core.common import dsl as studio_dsl
@@ -24,6 +18,7 @@ from openjiuwen_studio.core.executor.workflow.context import Context
 from openjiuwen_studio.core.executor.workflow.workflow import IWorkflowLoader, Workflow as ExecutorWorkflow
 
 from runtime_support.http_response_contract import LowcodeApiResponseCode
+from runtime_support.runtime_env import llm_api_key_env_var_name, resolve_llm_api_key_from_env
 
 
 WorkflowKey = Tuple[str, str]
@@ -31,20 +26,6 @@ WorkflowKey = Tuple[str, str]
 
 class WorkflowLlmApiKeyMissingError(Exception):
     """DSL LLM/意图/提问器节点：可解析的 LLM_KEY__* 与 JSON 内 api_key 均未配置。"""
-
-
-def _llm_api_key_env_name(base_url: str) -> Optional[str]:
-    url = (base_url or "").strip().strip('"').strip("'")
-    if not url:
-        return None
-    parsed = urlparse(url)
-    host = (parsed.hostname or "").replace(".", "_")
-    path = (parsed.path or "").strip("/").replace("/", "_")
-    parts = [p for p in (host, path) if p]
-    raw = "_".join(parts) if parts else url
-    slug = re.sub(r"[^A-Za-z0-9]+", "_", raw).strip("_").upper()
-    return f"LLM_KEY__{slug}" if slug else None
-
 
 def strip_dependencies(wf: Dict[str, Any]) -> Dict[str, Any]:
     return {k: v for k, v in wf.items() if k != "dependencies"}
@@ -102,11 +83,11 @@ def _inject_llm_into_component(comp: Dict[str, Any]) -> None:
     if not isinstance(mcc, dict):
         return
     base_url = str(mcc.get("api_base") or "").strip()
-    envn = _llm_api_key_env_name(base_url)
-    if not envn:
+    envn = llm_api_key_env_var_name(base_url)
+    env_val = resolve_llm_api_key_from_env(base_url)
+    if "<SLUG_FROM_BASE_URL>" in envn:
         return
 
-    env_val = (os.environ.get(envn) or "").strip()
     json_val = str(mcc.get("api_key") or "").strip()
     if env_val:
         mcc["api_key"] = env_val

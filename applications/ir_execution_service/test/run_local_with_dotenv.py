@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""本地测试入口：加载本目录 .env，补齐 OBS 占位，IR 根目录固定为 test/，再启动服务。
+"""本地测试入口：加载服务根目录 .env，补齐 OBS 占位，IR 根目录为本脚本所在 test/，再启动服务。
 
 用法（在 applications/ir_execution_service 下）：
-  uv run python run_local_with_dotenv.py
+  uv run python test/run_local_with_dotenv.py
 
 可选环境变量：IR_EXEC_HOST（默认 0.0.0.0）、IR_EXEC_PORT（默认 8090）。
 """
@@ -14,7 +14,9 @@ import os
 import sys
 from pathlib import Path
 
-_APP_ROOT = Path(__file__).resolve().parent
+# 本文件在 .../ir_execution_service/test/；应用与 ir_execution_service_app 在上一级
+_SERVICE_ROOT = Path(__file__).resolve().parent.parent
+_TEST_IR_ROOT = Path(__file__).resolve().parent
 
 
 def _ensure_env() -> None:
@@ -24,15 +26,19 @@ def _ensure_env() -> None:
         print("缺少 python-dotenv，请在本目录执行: uv sync", file=sys.stderr)
         raise SystemExit(1) from e
 
-    env_path = _APP_ROOT / ".env"
-    if env_path.is_file():
-        load_dotenv(env_path)
+    for env_path in (_SERVICE_ROOT / ".env", _TEST_IR_ROOT / ".env"):
+        if env_path.is_file():
+            load_dotenv(env_path)
+            break
     else:
-        print(f"警告: 未找到 {env_path}，仅使用当前进程已有环境变量", file=sys.stderr)
+        print(
+            f"警告: 未找到 {_SERVICE_ROOT / '.env'} 或 {_TEST_IR_ROOT / '.env'}，"
+            "仅使用当前进程已有环境变量",
+            file=sys.stderr,
+        )
 
-    test_ir_root = _APP_ROOT / "test"
-    test_ir_root.mkdir(parents=True, exist_ok=True)
-    os.environ["LOWCODE_IR_DOWNLOAD_DIR"] = str(test_ir_root.resolve())
+    _TEST_IR_ROOT.mkdir(parents=True, exist_ok=True)
+    os.environ["LOWCODE_IR_DOWNLOAD_DIR"] = str(_TEST_IR_ROOT.resolve())
 
     obs_placeholders = {
         "OBS_ACCESS_KEY_ID": "local-placeholder",
@@ -49,8 +55,9 @@ def _ensure_env() -> None:
 def main() -> None:
     _ensure_env()
 
-    if str(_APP_ROOT) not in sys.path:
-        sys.path.insert(0, str(_APP_ROOT))
+    service = str(_SERVICE_ROOT)
+    if service not in sys.path:
+        sys.path.insert(0, service)
 
     import ir_execution_service_app as app_entry
 

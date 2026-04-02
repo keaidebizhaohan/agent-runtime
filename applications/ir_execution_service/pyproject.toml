@@ -41,3 +41,13 @@ url = "https://mirrors.aliyun.com/pypi/simple/"
 where = ["."]
 exclude = ["*.egg-info", "test_script", "ir_for_test", "logs"]
 include = ["runtime_support*"]
+
+[tool.setuptools]
+py-modules = [
+    "dsl_workflow_dependency_loader",
+    "invoke_api",
+    "ir_execution_service_app",
+    "react_agent_builder",
+    "stream_api",
+    "workflow_ir_builder",
+]

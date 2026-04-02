@@ -1,7 +1,7 @@
 {
-  "id": "30a6705e-0938-4e39-810f-c89324a8de2f",
+  "id": "d56828c8-73bc-42b1-a6af-b4fa4aafcc94",
   "version": "draft",
-  "name": "Imported Workflow (imported)",
+  "name": "Imported Workflow (imported)_copy_copy",
   "description": "Imported Workflow",
   "start_id": [
     "1_5153d90b"
@@ -18,8 +18,7 @@
       "type": 1,
       "type_version": "1.0.0",
       "inputs": {
-        "city": "${city}",
-        "date": "${date}"
+        "query": "${query}"
       },
       "outputs": {},
       "branches": [],
@@ -33,47 +32,13 @@
       "type": 2,
       "type_version": "1.0.0",
       "inputs": {
-        "result": "${10_517b067c.result}"
+        "result": "${llm_7c_Zk.output}"
       },
       "outputs": {},
       "branches": [],
       "configs": {
-        "response_template": "{{result}}",
-        "stream_output": true
-      }
-    },
-    {
-      "id": "10_517b067c",
-      "version": "",
-      "name": "代码",
-      "description": "",
-      "type": 10,
-      "type_version": "1.0.0",
-      "inputs": {
-        "input": "${plugin_slXeh.data.res}"
-      },
-      "outputs": {},
-      "branches": [],
-      "configs": {
-        "language": "python",
-        "execute_type": "remote",
-        "code": "def main(args: Args):\n  return {'result': args.params['input'] + \"world\"}",
-        "output_params": [
-          {
-            "name": "result",
-            "type": "string"
-          }
-        ],
-        "exception_config": {
-          "max_retries": 3,
-          "timeout_seconds": 30,
-          "except_handling_method": "break",
-          "return_content": null,
-          "execute_exception_step": {
-            "default_router_id": "0",
-            "error_router_id": "branch_error"
-          }
-        }
+        "response_template": "final result: {{result}}",
+        "stream_output": false
       }
     },
     {
@@ -84,8 +49,8 @@
       "type": 3,
       "type_version": "1.0.0",
       "inputs": {
-        "city": "${1_5153d90b.city}",
-        "date": "${1_5153d90b.date}"
+        "city": "${questioner_4ne4Q.city}",
+        "date": "${questioner_4ne4Q.date}"
       },
       "outputs": {
         "output": "${output}"
@@ -93,19 +58,24 @@
       "branches": [],
       "configs": {
         "model": {
-          "model_id": "2",
+          "model_id": "1",
           "model_client_config": {
             "client_provider": "openai",
-            "api_key": "",
+            "api_key": null,
             "api_base": "https://dashscope.aliyuncs.com/compatible-mode/v1",
             "timeout": 60,
-            "model_name": "qwen3-max"
+            "model_name": "qwen3-max",
+            "parameters": {
+              "temperature": 0.7,
+              "max_tokens": 4000,
+              "top_p": 0.9
+            }
           },
           "request_config": {
             "model_name": "qwen3-max",
             "temperature": 0.7,
             "top_p": 0.9,
-            "stream": true
+            "stream": false
           }
         },
         "template_content": [
@@ -130,30 +100,6 @@
       }
     },
     {
-      "id": "workflow_gSlCK",
-      "version": "",
-      "name": "sub_workflow",
-      "description": "",
-      "type": 14,
-      "type_version": "1.0.0",
-      "inputs": {
-        "query": "${3_8c5e5428.output}"
-      },
-      "outputs": {
-        "response": "${response}",
-        "output": "${output}"
-      },
-      "branches": [],
-      "configs": {
-        "sub_workflow_info": {
-          "id": "718d197a-204b-4a56-9b2f-fff4712af50e",
-          "version": "draft",
-          "name": "",
-          "description": ""
-        }
-      }
-    },
-    {
       "id": "plugin_slXeh",
       "version": "",
       "name": "11111",
@@ -161,7 +107,7 @@
       "type": 19,
       "type_version": "1.0.0",
       "inputs": {
-        "add1": "${workflow_gSlCK.output.result}"
+        "add1": "${3_8c5e5428.output}"
       },
       "outputs": {},
       "branches": [],
@@ -215,7 +161,180 @@
       }
     },
     {
-      "id": "empty_node_10_517b067c_0_2_d55767d1",
+      "id": "questioner_4ne4Q",
+      "version": "",
+      "name": "提问器",
+      "description": "",
+      "type": 7,
+      "type_version": "1.0.0",
+      "inputs": {
+        "query": "${1_5153d90b.query}"
+      },
+      "outputs": {
+        "user_response": "${user_response}"
+      },
+      "branches": [],
+      "configs": {
+        "model": {
+          "model_id": "1",
+          "model_client_config": {
+            "client_provider": "openai",
+            "api_key": null,
+            "api_base": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "timeout": 60,
+            "model_name": "qwen3-max",
+            "parameters": {
+              "temperature": 0.7,
+              "max_tokens": 4000,
+              "top_p": 0.9
+            }
+          },
+          "request_config": {
+            "model_name": "qwen3-max",
+            "temperature": 0.7,
+            "top_p": 0.9,
+            "stream": false
+          }
+        },
+        "response_type": "reply_directly",
+        "question_content": "",
+        "extract_fields_from_response": true,
+        "field_names": [
+          {
+            "field_name": "date",
+            "description": "查询哪一天的天气",
+            "cn_field_name": "",
+            "required": true,
+            "default_value": "",
+            "type": "string"
+          },
+          {
+            "field_name": "city",
+            "description": "查询哪个城市的天气",
+            "cn_field_name": "",
+            "required": true,
+            "default_value": "",
+            "type": "string"
+          }
+        ],
+        "max_response": 3,
+        "with_chat_history": false,
+        "chat_history_max_rounds": 5,
+        "prompt_template": [],
+        "extra_prompt_for_fields_extraction": "",
+        "example_content": ""
+      }
+    },
+    {
+      "id": "output_hlyQg",
+      "version": "",
+      "name": "输出",
+      "description": "",
+      "type": 9,
+      "type_version": "1.0.0",
+      "inputs": {
+        "output": "${llm_7c_Zk.output}"
+      },
+      "outputs": {},
+      "branches": [],
+      "configs": {
+        "streaming": false,
+        "output_message": "output: {{output}}"
+      }
+    },
+    {
+      "id": "llm_7c_Zk",
+      "version": "",
+      "name": "大模型_1",
+      "description": "",
+      "type": 3,
+      "type_version": "1.0.0",
+      "inputs": {
+        "input": "${code_br6Gu.result}"
+      },
+      "outputs": {
+        "output": "${output}"
+      },
+      "branches": [],
+      "configs": {
+        "model": {
+          "model_id": "1",
+          "model_client_config": {
+            "client_provider": "openai",
+            "api_key": null,
+            "api_base": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "timeout": 60,
+            "model_name": "qwen3-max",
+            "parameters": {
+              "temperature": 0.7,
+              "max_tokens": 4000,
+              "top_p": 0.9
+            }
+          },
+          "request_config": {
+            "model_name": "qwen3-max",
+            "temperature": 0.7,
+            "top_p": 0.9,
+            "stream": false
+          }
+        },
+        "template_content": [
+          {
+            "role": "system",
+            "content": "    返回{{input}} 的中文版，换行后再加上{{input}}的英语版。"
+          },
+          {
+            "role": "user",
+            "content": "{{input}}"
+          }
+        ],
+        "response_format_type": "text",
+        "output_config": {
+          "output": {
+            "type": "string",
+            "description": "",
+            "required": true
+          }
+        },
+        "enable_history": false
+      }
+    },
+    {
+      "id": "code_br6Gu",
+      "version": "",
+      "name": "代码",
+      "description": "",
+      "type": 10,
+      "type_version": "1.0.0",
+      "inputs": {
+        "input": "${plugin_slXeh.data}"
+      },
+      "outputs": {},
+      "branches": [],
+      "configs": {
+        "language": "python",
+        "execute_type": "remote",
+        "code": "def main(args: Args):\n  import time\n  time.sleep(3)\n  return {'result': args.params['input']}",
+        "output_params": [
+          {
+            "name": "result",
+            "type": "string"
+          }
+        ],
+        "exception_config": {
+          "max_retries": 3,
+          "timeout_seconds": 30,
+          "except_handling_method": "break",
+          "return_content": null,
+          "execute_exception_step": {
+            "default_router_id": "0",
+            "error_router_id": "branch_error"
+          }
+        }
+      }
+    },
+    {
+      "id": "empty_node_code_br6Gu_0_llm_7c_Zk",
       "version": "",
       "name": "",
       "description": "",
@@ -231,49 +350,54 @@
     {
       "source": "1_5153d90b",
       "branch_id": "",
+      "target": "questioner_4ne4Q"
+    },
+    {
+      "source": "questioner_4ne4Q",
+      "branch_id": "",
       "target": "3_8c5e5428"
     },
     {
       "source": "3_8c5e5428",
-      "branch_id": "",
-      "target": "workflow_gSlCK"
-    },
-    {
-      "source": "workflow_gSlCK",
       "branch_id": "",
       "target": "plugin_slXeh"
     },
     {
       "source": "plugin_slXeh",
       "branch_id": "",
-      "target": "10_517b067c"
+      "target": "code_br6Gu"
     },
     {
-      "source": "10_517b067c",
+      "source": "code_br6Gu",
       "branch_id": "0",
-      "target": "empty_node_10_517b067c_0_2_d55767d1"
+      "target": "empty_node_code_br6Gu_0_llm_7c_Zk"
     },
     {
-      "source": "empty_node_10_517b067c_0_2_d55767d1",
+      "source": "empty_node_code_br6Gu_0_llm_7c_Zk",
       "branch_id": null,
+      "target": "llm_7c_Zk"
+    },
+    {
+      "source": "llm_7c_Zk",
+      "branch_id": "",
+      "target": "output_hlyQg"
+    },
+    {
+      "source": "output_hlyQg",
+      "branch_id": "",
       "target": "2_d55767d1"
     }
   ],
   "inputs": {
     "type": "object",
     "properties": {
-      "city": {
+      "query": {
         "type": "string",
-        "description": "City Name"
-      },
-      "date": {
-        "type": "string",
-        "description": "Date"
+        "description": ""
       }
     },
     "required": [
-      "city",
-      "date"
+      "query"
     ]
   },
   "outputs": {
@@ -284,133 +408,6 @@
   },
   "configs": {},
   "dependencies": {
-    "workflows": [
-      {
-        "id": "718d197a-204b-4a56-9b2f-fff4712af50e",
-        "version": "draft",
-        "name": "sub_workflow",
-        "description": "Imported Workflow",
-        "start_id": [
-          "1_5cb72dc7"
-        ],
-        "end_id": [
-          "2_8a988c78"
-        ],
-        "components": [
-          {
-            "id": "1_5cb72dc7",
-            "version": "",
-            "name": "Start",
-            "description": "",
-            "type": 1,
-            "type_version": "1.0.0",
-            "inputs": {
-              "query": "${query}"
-            },
-            "outputs": {},
-            "branches": [],
-            "configs": {}
-          },
-          {
-            "id": "2_8a988c78",
-            "version": "",
-            "name": "End",
-            "description": "",
-            "type": 2,
-            "type_version": "1.0.0",
-            "inputs": {
-              "result": "${3_ccd59578.output}"
-            },
-            "outputs": {},
-            "branches": [],
-            "configs": {
-              "response_template": "",
-              "stream_output": true
-            }
-          },
-          {
-            "id": "3_ccd59578",
-            "version": "",
-            "name": "大模型",
-            "description": "",
-            "type": 3,
-            "type_version": "1.0.0",
-            "inputs": {
-              "input": "${1_5cb72dc7.query}"
-            },
-            "outputs": {
-              "output": "${output}"
-            },
-            "branches": [],
-            "configs": {
-              "model": {
-                "model_id": "1",
-                "model_client_config": {
-                  "client_provider": "openai",
-                  "api_key": "",
-                  "api_base": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-                  "timeout": 60,
-                  "model_name": "qwen3-max"
-                },
-                "request_config": {
-                  "model_name": "qwen3-max",
-                  "temperature": 0.7,
-                  "top_p": 0.9,
-                  "stream": true
-                }
-              },
-              "template_content": [
-                {
-                  "role": "system",
-                  "content": "返回在完整保留用户输入的基础上，换行后拼接你的名字。\n你的名字确定为 deepseekv3"
-                },
-                {
-                  "role": "user",
-                  "content": "{{input}}"
-                }
-              ],
-              "response_format_type": "text",
-              "output_config": {
-                "output": {
-                  "type": "string",
-                  "description": "",
-                  "required": true
-                }
-              },
-              "enable_history": false
-            }
-          }
-        ],
-        "connections": [
-          {
-            "source": "1_5cb72dc7",
-            "branch_id": "",
-            "target": "3_ccd59578"
-          },
-          {
-            "source": "3_ccd59578",
-            "branch_id": "",
-            "target": "2_8a988c78"
-          }
-        ],
-        "inputs": {
-          "type": "object",
-          "properties": {
-            "query": {
-              "type": "string",
-              "description": ""
-            }
-          },
-          "required": []
-        },
-        "outputs": {
-          "result": {
-            "type": "ref",
-            "description": ""
-          }
-        },
-        "configs": {}
-      }
-    ]
+    "workflows": []
   }
 }

@@ -1,20 +1,95 @@
-"""从 Studio 导出 IR 构建 ReActAgent（stream / invoke 共用）。
-
-包含：AgentCompiler 编译、运行时配置归一化、按导出 JSON 开关挂载 MemoryRail 与 system 占位符。
-"""
+"""从 Studio 导出 IR 构建 ReActAgent。"""
 from __future__ import annotations
 
-import os
 import json
+import os
 from pathlib import Path
 from typing import Any
 
 from openjiuwen.core.common.schema.param import Param
+from openjiuwen.core.context_engine.schema.config import ContextEngineConfig
+from openjiuwen.core.foundation.llm.schema.config import ModelClientConfig, ModelRequestConfig
 from openjiuwen.core.memory.config.config import AgentMemoryConfig
-from openjiuwen.core.single_agent.agents.react_agent import ReActAgent
+from openjiuwen.core.single_agent.agents.react_agent import ReActAgent, ReActAgentConfig as NewReActAgentConfig
+from openjiuwen.core.single_agent.legacy.config import LegacyReActAgentConfig
+from openjiuwen.core.single_agent.schema.agent_card import AgentCard
 from openjiuwen_studio.lowcode.compiler import AgentCompiler
+from openjiuwen_studio.lowcode.config_adapter import ConfigAdapter
+from openjiuwen_studio.lowcode.schemas import ModelOverride
 
-from runtime_support.runtime_env import get_env, resolve_memory_scope_id
+from runtime_support.runtime_env import get_bool_env, get_env, resolve_llm_api_key_from_env, resolve_memory_scope_id
+
+
+def build_model_overrides_from_default_llm_env(export_data: dict[str, Any]) -> dict[str, ModelOverride]:
+    """按 DEFAULT_LLM_* 与 LLM_KEY__ 推导规则生成 ModelOverride，仅含键 str(agent.model_id)。"""
+    agent = export_data.get("agent") if isinstance(export_data.get("agent"), dict) else {}
+    mid = agent.get("model_id")
+    if mid is None or not str(mid).strip():
+        return {}
+
+    model_name = (os.environ.get("DEFAULT_LLM_MODEL_NAME") or "").strip()
+    base_url = (os.environ.get("DEFAULT_LLM_API_BASE") or "").strip()
+    api_key = (os.environ.get("DEFAULT_LLM_API_KEY") or "").strip()
+    provider = (os.environ.get("DEFAULT_LLM_MODEL_PROVIDER") or "").strip()
+
+    if not api_key and base_url:
+        api_key = resolve_llm_api_key_from_env(base_url)
+
+    override_kwargs: dict[str, Any] = {}
+    if model_name:
+        override_kwargs["name"] = model_name
+    if base_url:
+        override_kwargs["base_url"] = base_url
+    if api_key:
+        override_kwargs["api_key"] = api_key
+    if provider:
+        override_kwargs["provider"] = provider
+
+    if not override_kwargs:
+        return {}
+
+    return {str(mid): ModelOverride(**override_kwargs)}
+
+
+def normalize_runtime_config_for_react_agent(
+    config: LegacyReActAgentConfig | NewReActAgentConfig,
+) -> NewReActAgentConfig:
+    """兼容 legacy 与新版 ReActAgentConfig，统一为 core 新版配置。"""
+    if isinstance(config, NewReActAgentConfig):
+        return config
+
+    model_name = getattr(config, "model_name", "") or ""
+    m = getattr(config, "model_config", None)
+    info = getattr(m, "model_info", None) if m is not None else None
+    model_provider = str(getattr(m, "model_provider", "") or "")
+    mcc = ModelClientConfig(
+        model_provider=model_provider,
+        api_key=str(getattr(info, "api_key", "") or ""),
+        api_base=str(getattr(info, "api_base", "") or ""),
+        verify_ssl=get_bool_env("LLM_SSL_VERIFY", True),
+    )
+    mrc = ModelRequestConfig(
+        temperature=getattr(info, "temperature", None),
+        max_tokens=getattr(info, "max_tokens", None),
+        timeout=float(getattr(info, "timeout", 60) or 60),
+    )
+    ctx_cfg = ContextEngineConfig(
+        max_context_message_num=200,
+        default_window_round_num=config.constrain.reserved_max_chat_rounds,
+    )
+    return NewReActAgentConfig(
+        mem_scope_id=config.memory_scope_id or "",
+        model_name=str(model_name),
+        model_provider=model_provider,
+        api_key=str(getattr(info, "api_key", "") or ""),
+        api_base=str(getattr(info, "api_base", "") or ""),
+        prompt_template_name=config.prompt_template_name or "",
+        prompt_template=list(config.prompt_template or []),
+        max_iterations=config.constrain.max_iteration,
+        model_client_config=mcc,
+        model_config_obj=mrc,
+        context_engine_config=ctx_cfg,
+    )
 
 
 def _agent_memory_config_from_export_memory(memory: Any) -> AgentMemoryConfig:
@@ -137,57 +212,93 @@ async def _register_memory_rail_from_export(agent: Any, export_agent: dict[str, 
     _ensure_memory_placeholders_in_system_prompt(agent, agent_memory_cfg)
 
 
-async def build_react_agent(ir_path: Path, current_user: dict[str, Any], *, model_overrides: dict[str, Any] | None = None) -> ReActAgent:
-    """
-    统一的 Agent 构建入口，供 stream/invoke 共用。
-    注意：记忆 rail 是否挂载完全由导出 JSON 的开关 + IR_ENABLE_AGENT_MEMORY 决定。
-    """
-    export_data = json.loads(ir_path.read_text(encoding="utf-8"))
-    export_agent = export_data.get("agent") if isinstance(export_data.get("agent"), dict) else {}
+def _adapt_runtime_config(agent_config_dict: dict[str, Any]) -> Any:
+    adapt_to_runtime = getattr(ConfigAdapter, "adapt_to_runtime_config", None)
+    if callable(adapt_to_runtime):
+        return adapt_to_runtime(agent_config_dict)
+    return ConfigAdapter.adapt(agent_config_dict)
+
+
+def _agent_card_from_export_agent(export_agent: dict[str, Any]) -> AgentCard:
+    return AgentCard(
+        id=export_agent.get("agent_id", ""),
+        name=export_agent.get("agent_name", "Agent"),
+        description=export_agent.get("description", ""),
+        version=export_agent.get("agent_version", "draft"),
+    )
+
+
+async def _compile_runtime_config_from_export_data(
+    export_data: dict[str, Any],
+    current_user: dict[str, Any],
+    model_overrides: dict[str, Any] | None,
+) -> tuple[AgentCard, NewReActAgentConfig]:
     compiler = AgentCompiler()
-
-    # model_overrides 由调用侧准备（环境变量、请求覆盖等）
-    if model_overrides is None:
-        model_overrides = {}
-
-    resolved_agent: dict[str, Any] | None = None
-    if hasattr(compiler, "compile_for_runtime"):
-        compile_result = await compiler.compile_for_runtime(
+    export_agent = export_data.get("agent") if isinstance(export_data.get("agent"), dict) else {}
+    compile_for_runtime = getattr(compiler, "compile_for_runtime", None)
+    if callable(compile_for_runtime):
+        compile_result = await compile_for_runtime(
             config=export_data,
             model_overrides=model_overrides or None,
             current_user=current_user,
         )
-    else:
-        compiled = await compiler.compile_with_overrides_config(
-            config=export_data, model_overrides=model_overrides, current_user=current_user
+        return (
+            compile_result["agent_card"],
+            normalize_runtime_config_for_react_agent(compile_result["runtime_config"]),
         )
-        agent_config_dict = compiled["agent_config"]
-        resolved_agent = agent_config_dict
-        from openjiuwen_studio.lowcode.config_adapter import ConfigAdapter
 
-        adapt_rt = getattr(ConfigAdapter, "adapt_to_runtime_config", None)
-        runtime_config = adapt_rt(agent_config_dict) if adapt_rt is not None else ConfigAdapter.adapt(agent_config_dict)
-        from openjiuwen.core.single_agent.schema.agent_card import AgentCard
-
-        compile_result = {
-            "agent_card": AgentCard(
-                id=agent_config_dict.get("agent_id", ""),
-                name=agent_config_dict.get("agent_name", "Agent"),
-                description=agent_config_dict.get("description", ""),
-                version=agent_config_dict.get("agent_version", "draft"),
-            ),
-            "runtime_config": runtime_config,
-        }
-
-    # 运行时配置归一化逻辑仍复用 invoke_api（避免重复与 drift）
-    from invoke_api import _normalize_runtime_config_for_react_agent  # noqa: E402
-
-    agent = ReActAgent(card=compile_result["agent_card"])
-    agent.configure(
-        _normalize_runtime_config_for_react_agent(
-            compile_result["runtime_config"],
-            resolved_agent_dict=resolved_agent,
-        )
+    compiled = await compiler.compile_with_overrides_config(
+        config=export_data,
+        model_overrides=model_overrides,
+        current_user=current_user,
     )
+    agent_config_dict = compiled["agent_config"]
+    return (
+        _agent_card_from_export_agent(export_agent),
+        normalize_runtime_config_for_react_agent(_adapt_runtime_config(agent_config_dict)),
+    )
+
+
+async def build_react_agent_from_export_data(
+    export_data: dict[str, Any],
+    current_user: dict[str, Any],
+    *,
+    model_overrides: dict[str, Any] | None = None,
+) -> ReActAgent:
+    """由已解析的导出数据构建 ReActAgent。"""
+    export_agent = export_data.get("agent") if isinstance(export_data.get("agent"), dict) else {}
+    agent_card, runtime_config = await _compile_runtime_config_from_export_data(
+        export_data,
+        current_user,
+        model_overrides or None,
+    )
+    agent = ReActAgent(card=agent_card)
+    agent.configure(runtime_config)
     await _register_memory_rail_from_export(agent, export_agent)
     return agent
+
+
+async def build_react_agent(
+    ir_path: Path,
+    current_user: dict[str, Any],
+    *,
+    model_overrides: dict[str, Any] | None = None,
+) -> ReActAgent:
+    """由 IR 文件构建 ReActAgent。"""
+    export_data = json.loads(ir_path.read_text(encoding="utf-8"))
+    return await build_react_agent_from_export_data(
+        export_data,
+        current_user,
+        model_overrides=model_overrides,
+    )
+
+
+async def build_react_agent_from_ir(ir_path: Path, current_user: dict[str, Any]) -> ReActAgent:
+    """读取 IR 文件，按进程环境补齐模型覆盖后构建 ReActAgent。"""
+    export_data = json.loads(ir_path.read_text(encoding="utf-8"))
+    model_overrides = build_model_overrides_from_default_llm_env(export_data)
+    return await build_react_agent_from_export_data(
+        export_data,
+        current_user,
+        model_overrides=model_overrides or None,
+    )

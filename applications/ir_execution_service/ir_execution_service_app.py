@@ -2,16 +2,7 @@
 # -*- coding: utf-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2025-2025. All rights reserved.
 
-"""IR 执行服务 HTTP 入口：Agent 与 Workflow。
-
-基于 openjiuwen_runtime 的 BaseApp（init、shutdown、run），不继承 AgentApp：
-支持 ir_path、inputs JSON；根据 IR JSON 自动区分 Workflow 与 Agent。
-
-业务实现见 invoke_api.py（路由 /execute_invoke）与 stream_api.py（路由 /execute_stream）。
-
-运行：在 applications/ir_execution_service 目录执行
-python ir_execution_service_app.py [--host HOST] [--port|-p PORT]（端口默认见 BaseApp，当前为 8090）
-"""
+"""IR 执行服务 HTTP 入口。"""
 
 from __future__ import annotations
 
@@ -35,18 +26,25 @@ from runtime_support.error_logging import setup_error_file_logging
 prepare_runtime_environment()
 setup_error_file_logging()
 
-# core 默认 60s，complicated 等 DSL 续跑含多节点 LLM，易误判超时；与 test_script 对齐，可被环境变量覆盖
+# Workflow 默认超时较短，复杂 DSL 续跑时容易误判超时。
 os.environ.setdefault("WORKFLOW_EXECUTE_TIMEOUT", "300")
 
 from openjiuwen.core.runner import Runner
 from openjiuwen_runtime.service.app.base_app import BaseApp
-from openjiuwen_studio.schemas import ResponseModel
 
-from runtime_support.http_response_contract import LowcodeApiResponseCode, ResponseDataType
+from runtime_support.http_response_contract import LowcodeApiResponseCode, build_error_response_model
 from runtime_support.runtime_bootstrap import ensure_runtime_ready
 
-# 与 invoke_api.JSON_MEDIA_TYPE 一致（本文件不 import invoke_api，避免顶层拉全量依赖）
 _JSON_MEDIA_TYPE = "application/json; charset=utf-8"
+
+
+def _invalid_request_json_response(exc: RequestValidationError) -> JSONResponse:
+    body = build_error_response_model(
+        LowcodeApiResponseCode.INVALID_REQUEST,
+        message=LowcodeApiResponseCode.INVALID_REQUEST.default_message,
+        payload={"errors": exc.errors()},
+    )
+    return JSONResponse(body.model_dump(), media_type=_JSON_MEDIA_TYPE)
 
 
 class IrQueryBody(BaseModel):
@@ -78,15 +76,7 @@ class IrExecutionServiceApp(BaseApp):
 
                 return EventSourceResponse(validation_error_stream_events(exc))
             if path.endswith("/execute_invoke"):
-                body = ResponseModel(
-                    code=int(LowcodeApiResponseCode.INVALID_REQUEST),
-                    message=LowcodeApiResponseCode.INVALID_REQUEST.default_message,
-                    data={
-                        "type": ResponseDataType.ERROR.value,
-                        "payload": {"errors": exc.errors(), "message": "invalid request body"},
-                    },
-                )
-                return JSONResponse(body.model_dump(), media_type=_JSON_MEDIA_TYPE)
+                return _invalid_request_json_response(exc)
             return JSONResponse(status_code=422, content={"detail": exc.errors()})
 
         @self.app.post("/execute_stream")

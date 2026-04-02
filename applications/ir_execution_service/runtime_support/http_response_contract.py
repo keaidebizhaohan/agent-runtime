@@ -1,15 +1,14 @@
 # coding: utf-8
 # Copyright (c) Huawei Technologies Co., Ltd. 2025-2025. All rights reserved.
 
-"""低码 Runner HTTP 响应体约定：数值 `code` 与 `data.type` 字面量。
-
-与 README「4.2.2.1 code 错误码说明」及「Workflow.stream / agent.stream 转换总表」对齐；
-invoke / stream 共用 `openjiuwen_studio.schemas.ResponseModel` 形态。
-"""
+"""低码 Runner HTTP 响应体约定。"""
 
 from __future__ import annotations
 
 from enum import Enum, IntEnum
+from typing import Any
+
+from openjiuwen_studio.schemas import ResponseModel
 
 
 class LowcodeApiResponseCode(IntEnum):
@@ -77,3 +76,39 @@ class ResponseDataType(str, Enum):
     INTERACTION = "interaction"
     FORCE_FINISH = "force_finish"
     UNKNOWN = "unknown"
+
+
+def build_error_response_model(
+    code: LowcodeApiResponseCode,
+    *,
+    message: str | None = None,
+    payload: dict[str, Any] | None = None,
+) -> ResponseModel:
+    msg = message if message is not None else code.default_message
+    body: dict[str, Any] = {"message": msg}
+    if payload:
+        body.update(payload)
+    return ResponseModel(
+        code=int(code),
+        message=msg,
+        data={"type": ResponseDataType.ERROR.value, "payload": body},
+    )
+
+
+def to_jsonable(obj: Any) -> Any:
+    """将 core 或 studio 对象转为可 JSON 序列化的 dict、list 或标量。"""
+    if obj is None or isinstance(obj, (str, int, float, bool)):
+        return obj
+    if isinstance(obj, dict):
+        return {str(k): to_jsonable(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [to_jsonable(x) for x in obj]
+    model_dump = getattr(obj, "model_dump", None)
+    if callable(model_dump):
+        try:
+            return model_dump(mode="json")
+        except TypeError:
+            return model_dump()
+    if hasattr(obj, "__dict__"):
+        return {k: to_jsonable(v) for k, v in vars(obj).items() if not k.startswith("_")}
+    return str(obj)

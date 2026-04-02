@@ -13,31 +13,19 @@
 画布 IR 路径下 LLM、提问器、意图节点由 model_references 补全密钥与端点；插件由 plugins 预计算 plugin_tool_configs。
 当 api_key 为空时，按 base_url 生成 LLM_KEY__ 前缀的环境变量名，从进程环境变量读取。
 
-运行前需将 open-agent-studio/backend 加入 PYTHONPATH，并安装 openjiuwen 与 Studio 依赖。
+运行前需安装 openjiuwen 与 openjiuwen_studio 依赖。
 """
 
 from __future__ import annotations
 
-import asyncio
 import json
 import os
-import re
-import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from urllib.parse import urlparse
-
-# 须先于 openjiuwen_studio 的 import
-_APP_DIR = Path(__file__).resolve().parent
-for _cand in (
-    _APP_DIR.parent.parent.parent / "open-agent-studio" / "backend",
-    _APP_DIR.parent.parent.parent.parent / "open-agent-studio" / "backend",
-):
-    if _cand.is_dir() and str(_cand) not in sys.path:
-        sys.path.insert(0, str(_cand))
-        break
 
 from pydantic import ValidationError
+
+_APP_DIR = Path(__file__).resolve().parent
 
 from openjiuwen.core.common.logging import logger
 from openjiuwen_studio.core.common import dsl as studio_dsl
@@ -92,28 +80,11 @@ from dsl_workflow_dependency_loader import (
     looks_like_dsl_workflow_export,
 )
 
-from runtime_support.runtime_env import get_bool_env
+from runtime_support.runtime_env import get_bool_env, resolve_llm_api_key_from_env
 
 # ---------------------------------------------------------------------------
 # 常量与路径
 # ---------------------------------------------------------------------------
-
-LLM_API_KEY_ENV_PREFIX = "LLM_KEY__"
-
-
-def _llm_api_key_env_name(base_url: str) -> Optional[str]:
-    """由 base_url 推导 LLM_KEY__ 开头的环境变量名；无效 URL 时返回 None。"""
-    url = (base_url or "").strip().strip('"').strip("'")
-    if not url:
-        return None
-    parsed = urlparse(url)
-    host = (parsed.hostname or "").replace(".", "_")
-    path = (parsed.path or "").strip("/").replace("/", "_")
-    parts = [p for p in (host, path) if p]
-    raw = "_".join(parts) if parts else url
-    slug = re.sub(r"[^A-Za-z0-9]+", "_", raw).strip("_").upper()
-    return f"{LLM_API_KEY_ENV_PREFIX}{slug}" if slug else None
-
 
 def inject_api_keys_into_model_references(model_references: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     out: Dict[str, Any] = {}
@@ -123,11 +94,9 @@ def inject_api_keys_into_model_references(model_references: Optional[Dict[str, A
         cell = dict(ref)
         base_url = str(cell.get("base_url") or "").strip()
         if not str(cell.get("api_key") or "").strip() and base_url:
-            envn = _llm_api_key_env_name(base_url)
-            if envn:
-                sk = os.environ.get(envn, "").strip()
-                if sk:
-                    cell["api_key"] = sk
+            api_key = resolve_llm_api_key_from_env(base_url)
+            if api_key:
+                cell["api_key"] = api_key
         out[str(key)] = cell
     return out
 
@@ -800,23 +769,3 @@ async def build_core_workflow_from_ir_file(path: str | Path, **kwargs: Any) -> A
     p = Path(path).expanduser().resolve()
     ir = json.loads(p.read_text(encoding="utf-8"))
     return await build_core_workflow_from_ir_dict(ir, **kwargs)
-
-
-async def _demo() -> None:
-    from runtime_support.runtime_env_prepare import prepare_runtime_environment
-
-    prepare_runtime_environment()
-    default_json = _APP_DIR / "workflow_ir.json"
-    target = Path(os.environ.get("WORKFLOW_IR_JSON", str(default_json))).resolve()
-    if not target.is_file():
-        print(f"[demo] 跳过：未找到 {target}")
-        return
-    wf = await build_core_workflow_from_ir_file(
-        target,
-        space_id=os.environ.get("WORKFLOW_SPACE_ID", "default"),
-    )
-    print(f"[demo] OK: Workflow card id={wf.card.id!r} name={wf.card.name!r}")
-
-
-if __name__ == "__main__":
-    asyncio.run(_demo())
