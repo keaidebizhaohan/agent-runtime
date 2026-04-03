@@ -240,9 +240,9 @@ async def query(msgs, request) -> AsyncIterator[Tuple[dict, bool]]:
     try:
         chunk_count = 0
         async for chunk in Runner.run_agent_streaming(
-                agent=app.agent,
-                inputs=inputs,
-                session=conversation_id
+            agent=app.agent,
+            inputs=inputs,
+            session=conversation_id
         ):
             if chunk:
                 chunk_count += 1
@@ -254,12 +254,20 @@ async def query(msgs, request) -> AsyncIterator[Tuple[dict, bool]]:
                 )
                 for event in events:
                     yield event, False
-
         logger.info(f"Agent 执行完成 - conversation_id: {conversation_id}, chunks: {chunk_count}")
-
     except Exception as e:
         logger.error(f"Agent 执行出错 - conversation_id: {conversation_id}, error: {str(e)}", exc_info=True)
         raise
+
+    # 检查是否没有任何chunk输出，目前报错会被底层吞掉，不会走到except，无法被捕获
+    if chunk_count == 0:
+        logger.error(f"Agent 执行未产生任何输出 - conversation_id: {conversation_id}，可能发生了内部错误")
+        yield {
+            "type": "RUN_ERROR",
+            "message": "AGENT或模型调用失败，请在Studio中测试AGENT或检查模型配置（API Key、Base URL、模型名称等）",
+            "code": "0101"
+        }, True
+        return  # 提前返回，error、finalize二选一
 
     final_events = finalize_agui_stream(
         trace_context=trace_context,
@@ -267,9 +275,8 @@ async def query(msgs, request) -> AsyncIterator[Tuple[dict, bool]]:
     )
 
     for i, event in enumerate(final_events):
-            yield event, i == len(final_events) - 1
+        yield event, i == len(final_events) - 1
         
-
 
 @app.shutdown
 async def shutdown():
