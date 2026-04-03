@@ -21,7 +21,6 @@ from openjiuwen_runtime.foundation.config import settings
 from openjiuwen_runtime.foundation.db.sqlite_handler import SQLiteHandler
 from openjiuwen_runtime.foundation.db.mysql_handler import MySQLHandler
 from openjiuwen_runtime.foundation.port_utils import allocate_port, is_port_available
-from openjiuwen_runtime.foundation.deploy_utils import get_deploy_dir, get_dist_dir
 
 
 # 配置日志
@@ -99,10 +98,8 @@ def prepare_subprocess_deployment(
     logger.info(f"Port: {port}")
 
     # 获取 WHL 包路径
-    dist_dir = get_dist_dir()
-    logger.info(f"dist_path: {dist_dir}")
-
-    whl_path = Path(dist_dir) / "lowcode_agent_runner-0.1.0-py3-none-any.whl"
+    logger.info(f"dist_path: {settings.dist_path}")
+    whl_path = settings.dist_path / "lowcode_agent_runner-0.1.0-py3-none-any.whl"
     if not whl_path.exists():
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -156,7 +153,8 @@ async def deploy_agent(
         logger.info(f"Generated deployment_id: {deployment_id}")
 
         # 保存上传的 JSON 文件到部署目录下
-        deploy_dir = get_deploy_dir(deployment_id)
+        deploy_dir = settings.deploy_path/deployment_id
+        deploy_dir.mkdir(parents=True, exist_ok=True)
         json_file_path = deploy_dir / "ir.json"
         content = await file.read()
         json_file_path.write_bytes(content)

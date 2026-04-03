@@ -20,7 +20,6 @@ from ..base.models import DeployContext, DeployResult
 from .models import DockerParams
 from ...models.enums import DeploymentStatus
 
-from openjiuwen_runtime.foundation.deploy_utils import get_deploy_dir
 from openjiuwen_runtime.foundation.config import settings
 
 logger = logging.getLogger(__name__)
@@ -227,7 +226,7 @@ class DockerDeployer(Deployer[DockerParams]):
                 del self._containers[deployment_id]
 
             # 清理部署目录
-            deploy_context_dir = get_deploy_dir(deployment_id)
+            deploy_context_dir = settings.deploy_path/deployment_id
             logger.debug(f"Cleaning deploy directory: {deploy_context_dir}")
             shutil.rmtree(deploy_context_dir, ignore_errors=True)
 

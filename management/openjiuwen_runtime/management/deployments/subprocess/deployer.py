@@ -22,7 +22,6 @@ from .models import SubprocessParams
 from ...models.enums import DeploymentStatus
 
 from openjiuwen_runtime.foundation.venv_manager import VirtualEnvironmentManager
-from openjiuwen_runtime.foundation.deploy_utils import get_deploy_dir, get_dist_dir
 from openjiuwen_runtime.foundation.log.utils import mask_userdata, mask_cmd
 from openjiuwen_runtime.foundation.config import settings
 
@@ -133,14 +132,11 @@ class LocalSubprocessDeployer(Deployer[SubprocessParams]):
             venv_path = self.venv_manager.create_venv(deployment_id)
             logger.info(f"Virtual environment created: {venv_path}")
 
-            # 优先读取环境变量，未配置则使用原始默认路径
-            dist_path = get_dist_dir()
-            logger.info(f"dist_path: {dist_path}")
-
             # 获取所有 .whl 文件
-            whl_files = list(dist_path.glob("*.whl"))
+            logger.info(f"dist_path: {settings.dist_path}")
+            whl_files = list(settings.dist_path.glob("*.whl"))
             if not whl_files:
-                raise RuntimeError(f"No .whl files found in dist directory: {dist_path}")
+                raise RuntimeError(f"No .whl files found in dist directory: {settings.dist_path}")
 
             logger.info(f"whl_files: {whl_files}")
 

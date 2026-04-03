@@ -41,6 +41,12 @@ class Settings(BaseSettings):
     DEPLOY_TYPE: Literal["subprocess", "docker", "k8s"] = Field(default="subprocess", env="DEPLOY_TYPE")
 
     # ========================
+    # 内置 对象
+    # ========================
+    deploy_path: Path | None = None
+    dist_path: Path | None = None
+
+    # ========================
     # MySQL 动态必选校验
     # ========================
     @model_validator(mode="after")
@@ -61,6 +67,35 @@ class Settings(BaseSettings):
             if missing:
                 raise ValueError(f"When DB_TYPE=mysql, the following fields are required: {', '.join(missing)}")
         return self
+
+
+    # ========================
+    # 路径校验：相对目录 → 项目根目录绝对路径 + 自动创建
+    # ========================
+    @model_validator(mode="after")
+    def resolve_and_create_paths(self) -> "Settings":
+        """
+        如果 DEPLOY_DIR / DIST_DIR 是相对路径，自动拼接为项目根目录的绝对路径
+        并自动创建目录（避免运行时报错）
+        """
+        # 处理 DEPLOY_DIR
+        self.deploy_path = Path(self.DEPLOY_DIR)
+        if not self.deploy_path.is_absolute():
+            self.deploy_path = PROJECT_ROOT / self.deploy_path
+        self.DEPLOY_DIR = str(self.deploy_path.resolve())
+
+        # 处理 DIST_DIR
+        self.dist_path = Path(self.DIST_DIR)
+        if not self.dist_path.is_absolute():
+            self.dist_path = PROJECT_ROOT / self.dist_path
+        self.DIST_DIR = str(self.dist_path.resolve())
+
+        # 自动创建目录（可选，非常实用）
+        self.deploy_path.mkdir(parents=True, exist_ok=True)
+        self.dist_path.mkdir(parents=True, exist_ok=True)
+
+        return self
+
 
     # 自动从 .env 读取
     model_config = SettingsConfigDict(

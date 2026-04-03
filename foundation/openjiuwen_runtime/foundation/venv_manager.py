@@ -8,7 +8,6 @@ import os
 import shlex
 from pathlib import Path
 from typing import Optional
-from .deploy_utils import get_deploy_dir
 from .config import settings
 
 logger = logging.getLogger(__name__)
@@ -30,7 +29,7 @@ class VirtualEnvironmentManager:
         Returns:
             虚拟环境根目录路径
         """
-        return get_deploy_dir(deployment_id)/".venv"
+        return settings.deploy_path/deployment_id/".venv"
 
 
     def create_venv(self, deployment_id: str) -> Path:

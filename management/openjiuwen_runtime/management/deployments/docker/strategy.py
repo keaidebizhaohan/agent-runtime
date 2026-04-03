@@ -8,6 +8,8 @@ from ..base.models import DeployContext, CommonParams
 from .models import DockerParams, DockerInfo, DOCKER_TABLE_DEF
 from .deployer import DockerDeployer
 
+from openjiuwen_runtime.foundation.log.utils import mask_userdata
+
 import logging
 logger = logging.getLogger(__name__)
 
@@ -59,6 +61,15 @@ class DockerStrategy(BaseDeploymentStrategy[DockerInfo]):
         else:
             data = record
 
+        # 从 data 字段中提取 userdata
+        record_data = data.get("data") or {}
+        userdata = record_data.get("userdata") if isinstance(record_data, dict) else None
+
+        env_vars = {}
+        if userdata:
+            env_vars["RUNTIME_USERDATA"] = userdata
+            logger.info(f"Using userdata: {mask_userdata(userdata)}")
+
         return DeployContext(
             common=CommonParams(
                 deployment_id=data.get("deployment_id"),
@@ -72,7 +83,7 @@ class DockerStrategy(BaseDeploymentStrategy[DockerInfo]):
                 package_name=data.get("package_name"),
                 container_name=data.get("container_name"),
                 image=data.get("image"),
-                env_vars=data.get("env_vars"),
+                env_vars=env_vars,
                 volumes=data.get("volumes"),
                 port=data.get("port"),
             ),
