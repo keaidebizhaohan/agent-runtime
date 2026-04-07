@@ -156,9 +156,16 @@ def _ensure_memory_placeholders_in_system_prompt(agent: Any, agent_memory_cfg: A
         return
 
     cfg = getattr(agent, "_config", None)
-    prompt_template = getattr(cfg, "prompt_template", None)
-    if not isinstance(prompt_template, list) or not prompt_template:
+    if cfg is None:
         return
+    prompt_template = getattr(cfg, "prompt_template", None)
+    if not isinstance(prompt_template, list):
+        prompt_template = []
+        try:
+            cfg.prompt_template = prompt_template
+        except (AttributeError, TypeError):
+            return
+    # 空列表时也必须继续：否则 MemoryRail 写入 ctx.extra 的占位符永远不会出现在任何 system 消息里。
 
     def _has_placeholder(key: str) -> bool:
         token = "{{" + key + "}}"
@@ -228,6 +235,24 @@ def _agent_card_from_export_agent(export_agent: dict[str, Any]) -> AgentCard:
     )
 
 
+def _prepend_configs_system_prompt_first(
+    export_agent: dict[str, Any],
+    runtime_config: NewReActAgentConfig,
+) -> None:
+    """将导出 IR 中 agent.configs.system_prompt 作为第一条 system 与 prompt_template 合并（置前）。"""
+    configs = export_agent.get("configs") if isinstance(export_agent.get("configs"), dict) else None
+    if not configs:
+        return
+    raw = configs.get("system_prompt")
+    if not isinstance(raw, str):
+        return
+    text = raw.strip()
+    if not text:
+        return
+    existing = list(runtime_config.prompt_template or [])
+    runtime_config.prompt_template = [{"role": "system", "content": text}, *existing]
+
+
 async def _compile_runtime_config_from_export_data(
     export_data: dict[str, Any],
     current_user: dict[str, Any],
@@ -242,10 +267,9 @@ async def _compile_runtime_config_from_export_data(
             model_overrides=model_overrides or None,
             current_user=current_user,
         )
-        return (
-            compile_result["agent_card"],
-            normalize_runtime_config_for_react_agent(compile_result["runtime_config"]),
-        )
+        runtime_config = normalize_runtime_config_for_react_agent(compile_result["runtime_config"])
+        _prepend_configs_system_prompt_first(export_agent, runtime_config)
+        return (compile_result["agent_card"], runtime_config)
 
     compiled = await compiler.compile_with_overrides_config(
         config=export_data,
@@ -253,10 +277,9 @@ async def _compile_runtime_config_from_export_data(
         current_user=current_user,
     )
     agent_config_dict = compiled["agent_config"]
-    return (
-        _agent_card_from_export_agent(export_agent),
-        normalize_runtime_config_for_react_agent(_adapt_runtime_config(agent_config_dict)),
-    )
+    runtime_config = normalize_runtime_config_for_react_agent(_adapt_runtime_config(agent_config_dict))
+    _prepend_configs_system_prompt_first(export_agent, runtime_config)
+    return (_agent_card_from_export_agent(export_agent), runtime_config)
 
 
 async def build_react_agent_from_export_data(

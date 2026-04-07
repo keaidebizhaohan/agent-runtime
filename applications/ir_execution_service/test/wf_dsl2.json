@@ -38,7 +38,7 @@
       "branches": [],
       "configs": {
         "response_template": "final result: {{result}}",
-        "stream_output": false
+        "stream_output": true
       }
     },
     {
@@ -75,7 +75,7 @@
             "model_name": "qwen3-max",
             "temperature": 0.7,
             "top_p": 0.9,
-            "stream": false
+            "stream": true
           }
         },
         "template_content": [
@@ -193,7 +193,7 @@
             "model_name": "qwen3-max",
             "temperature": 0.7,
             "top_p": 0.9,
-            "stream": false
+            "stream": true
           }
         },
         "response_type": "reply_directly",
@@ -238,7 +238,7 @@
       "outputs": {},
       "branches": [],
       "configs": {
-        "streaming": false,
+        "streaming": true,
         "output_message": "output: {{output}}"
       }
     },
@@ -275,7 +275,7 @@
             "model_name": "qwen3-max",
             "temperature": 0.7,
             "top_p": 0.9,
-            "stream": false
+            "stream": true
           }
         },
         "template_content": [

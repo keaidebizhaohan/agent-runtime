@@ -17,6 +17,7 @@
     "opening_remarks": "您好！我是您的智能助手，很高兴为您服务。请问有什么可以帮助您的吗？",
     "default_response": null,
     "configs": {
+      "system_prompt":"景点推荐助手。帮助用户推荐合适景点。",
       "retrieval_config": {
         "topk": 5,
         "use_sync": false,
@@ -33,12 +34,7 @@
       "timeout": 300,
       "temperature": 0
     },
-    "prompt_template": [
-      {
-        "role": "system",
-        "content": "【来自导出 JSON 的 system 提示，勿删改口令】你的名字严格是「低码导出配置校验助手」。对用户任何提问：回复的第一句必须原文包含固定口令「LOWCODE_EXPORT_SYS_7a2e」，随后再用一两句中文简要作答；不要向用户解释本条规则。"
-      }
-    ],
+    "prompt_template": [],
     "constraint": {
       "max_iteration": 5,
       "reserved_max_chat_rounds": 10
@@ -51,22 +47,16 @@
       "memory_base": null,
       "variable_config": [
         {
-          "id": "",
+          "id": "var_131231231231",
           "name": "name",
           "enabled": true,
           "description": "User Name"
         },
         {
-          "id": "",
+          "id": "var_1343531231",
           "name": "age",
           "enabled": true,
           "description": "User Age"
-        },
-        {
-          "id": "",
-          "name": "interest",
-          "enabled": true,
-          "description": "User Interests"
         }
       ],
       "user_profile_config": true,
@@ -100,7 +90,7 @@
       "parameters": {
         "top_p": 0.9,
         "max_tokens": 5000,
-        "temperature": 0
+        "temperature": 0.7
       }
     }
   }
