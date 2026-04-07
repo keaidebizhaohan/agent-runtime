@@ -9,10 +9,8 @@ AgentApp - Agent 应用类
 
 import json
 import asyncio
-import inspect
 import logging
-from typing import Callable, Optional, AsyncIterator, Tuple, Dict, Any
-from fastapi import Request, HTTPException
+from typing import Callable, Optional
 from fastapi.responses import StreamingResponse
 
 from .base_app import BaseApp
@@ -160,7 +158,6 @@ class AgentApp(BaseApp):
                     # 创建中间件上下文
                     context = MiddlewareContext()
                     processed_messages = messages
-                    error_occurred = False
 
                     # 调用所有中间件的 before_query 方法
                     for mw in self._middlewares:
@@ -172,11 +169,13 @@ class AgentApp(BaseApp):
                             pass
 
                     try:
+                        message_count = 0
                         # 调用查询钩子并迭代结果
-                        # 钩子应该是异步生成器函数
                         async for msg, last in self._query_hook(processed_messages, query_request):
-                            # 对每个消息调用 before_response 方法
+                            message_count += 1
                             processed_msg = msg
+
+                            # 中间件处理
                             for mw in self._middlewares:
                                 try:
                                     processed_msg = await mw.before_response(
@@ -184,36 +183,58 @@ class AgentApp(BaseApp):
                                     )
                                 except Exception:
                                     pass
-                            yield f"data: {json.dumps(processed_msg)}\n\n"
 
-                        # 查询成功完成后调用 after_query 方法
+                            # 准备 SSE 数据
+                            sse_data = f"data: {json.dumps(processed_msg, ensure_ascii=False, default=str)}\n\n"
+                            yield sse_data
+
+                        # 调用 after_query 中间件
                         for mw in self._middlewares:
                             try:
                                 await mw.after_query(processed_messages, query_request, context)
                             except Exception:
                                 pass
+
+                        logger.info(
+                            f"Query completed - conversation_id: {query_request.conversation_id}, "
+                            f"total_messages: {message_count}"
+                        )
+
                     except Exception as e:
-                        error_occurred = True
                         logger.error(
                             f"Query execution failed - conversation_id: {query_request.conversation_id}, error: {e}",
                             exc_info=True,
                         )
-                        # 发生异常时调用 on_error 方法
+                        # 调用错误中间件
                         for mw in self._middlewares:
                             try:
                                 await mw.on_error(processed_messages, query_request, e, context)
                             except Exception:
                                 pass
-                        # 将异常作为错误事件返回给客户端，而不是 raise 导致进程崩溃
+
+                        # 发送错误事件
                         error_event = {
                             "type": "error",
                             "error": str(e),
                         }
-                        yield f"data: {json.dumps(error_event)}\n\n"
+                        error_data = f"data: {json.dumps(error_event, ensure_ascii=False, default=str)}\n\n"
+                        yield error_data
+
+                    except asyncio.CancelledError:
+                        logger.warning(
+                            "Query stream cancelled - conversation_id: %s",
+                            query_request.conversation_id,
+                        )
+                        raise
 
             return StreamingResponse(
                 generate(),
                 media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache, no-transform",
+                    "Connection": "keep-alive",
+                    "X-Accel-Buffering": "no",
+                },
             )
 
         @self.app.post("/reset_conversation")
@@ -271,9 +292,11 @@ class AgentApp(BaseApp):
         @self.app.get("/health")
         async def health_with_agent():
             """健康检查（包含 Agent 状态）"""
-            return {
+            health_data = {
                 "status": "healthy",
                 "app": self.app_name,
                 "version": self.version,
                 "agent_loaded": self.agent is not None,
             }
+
+            return health_data

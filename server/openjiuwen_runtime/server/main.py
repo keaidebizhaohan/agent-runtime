@@ -8,6 +8,7 @@ import logging
 import tempfile
 import uuid
 from pathlib import Path
+from contextlib import asynccontextmanager
 
 from .utils import mask_userdata
 from .middleware.tenant import TenantContextMiddleware, get_tenant_context
@@ -33,16 +34,6 @@ logger = logging.getLogger(__name__)
 # 追踪已分配的端口，防止并发部署时端口冲突
 _allocated_ports: set[int] = set()
 
-# 创建 FastAPI 应用
-app = FastAPI(
-    title="Agent Runtime Manager API",
-    description="Agent 部署管理服务（支持租户隔离）",
-    version="2.1.0",
-)
-
-# 添加租户中间件（临时禁用租户验证，测试用）
-app.add_middleware(TenantContextMiddleware, require_tenant=False)
-
 # 初始化数据库组件
 logger.info(f"Using database: {settings.DB_TYPE}")
 if settings.DB_TYPE == "sqlite":
@@ -54,15 +45,27 @@ else:
 
 manager = DeploymentManager(db_handler)
 
-# 启动时初始化 manager
-@app.on_event("startup")
-async def startup_event():
-    await manager.initialize()
 
-# 关闭时清理
-@app.on_event("shutdown")
-async def shutdown_event():
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """应用生命周期管理"""
+    # 启动时初始化
+    await manager.initialize()
+    yield
+    # 关闭时清理
     await manager.shutdown()
+
+
+# 创建 FastAPI 应用
+app = FastAPI(
+    title="Agent Runtime Manager API",
+    description="Agent 部署管理服务（支持租户隔离）",
+    version="2.1.0",
+    lifespan=lifespan,
+)
+
+# 添加租户中间件（临时禁用租户验证，测试用）
+app.add_middleware(TenantContextMiddleware, require_tenant=False)
 
 
 # ==================== 健康检查 ====================

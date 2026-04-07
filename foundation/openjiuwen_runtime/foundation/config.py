@@ -36,7 +36,7 @@ class Settings(BaseSettings):
     DEPLOY_DIR: str = Field(default="/tmp/deploys", env="DEPLOY_DIR")
     DIST_DIR: str = Field(default="/tmp/dist", env="DIST_DIR")
     HOST: str = Field(default="0.0.0.0", env="HOST")
-    PORT: int = Field(default="8186", env="PORT")
+    PORT: int = Field(default=8186, env="PORT")
     UV_EXTRA_ARGS: str = Field(default="", env="UV_EXTRA_ARGS")
     DEPLOY_TYPE: Literal["subprocess", "docker", "k8s"] = Field(default="subprocess", env="DEPLOY_TYPE")
 

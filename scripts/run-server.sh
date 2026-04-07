@@ -40,10 +40,16 @@ set -a                  # 开启：自动导出环境变量
 source ${ENV_FILE}      # 读取环境变量
 set +a                  # 关闭：恢复正常
 
-sed -i '/openjiuwen_studio/d' ${PROJECT_DIR}/applications/lowcode_agent/pyproject.toml
-sed -i '/openjiuwen-runtime-service/d' ${PROJECT_DIR}/applications/lowcode_agent/pyproject.toml
-sed -i '/openjiuwen-runtime-foundation/d' ${PROJECT_DIR}/management/pyproject.toml
-sed -i '/openjiuwen-runtime-management/d' ${PROJECT_DIR}/server/pyproject.toml
+if [[ "$OSTYPE" == "darwin"* ]]; then
+    SED_I_FLAG="-i ''"
+else
+    SED_I_FLAG="-i"
+fi
+
+sed ${SED_I_FLAG} '/openjiuwen_studio/d' ${PROJECT_DIR}/applications/lowcode_agent/pyproject.toml
+sed ${SED_I_FLAG} '/openjiuwen-runtime-service/d' ${PROJECT_DIR}/applications/lowcode_agent/pyproject.toml
+sed ${SED_I_FLAG} '/openjiuwen-runtime-foundation/d' ${PROJECT_DIR}/management/pyproject.toml
+sed ${SED_I_FLAG} '/openjiuwen-runtime-management/d' ${PROJECT_DIR}/server/pyproject.toml
 
 
 # 自动解析 DIST_DIR：相对路径 = 基于 PROJECT_DIR；绝对路径 = 保持不变
@@ -64,6 +70,12 @@ uv sync ${UV_EXTRA_ARGS}
 rm -rf dist
 uv build --out-dir ${FINAL_DIST_DIR}
 
+# complie dist/openjiuwen-0.1.9-py3-none-any.whl (core library)
+if [ -d "${PROJECT_DIR}/../agent-core" ]; then
+    cd ${PROJECT_DIR}/../agent-core
+    rm -rf dist
+    uv build --out-dir ${FINAL_DIST_DIR}
+fi
 
 # complie dist/lowcode_agent_runner-0.1.0-py3-none-any.whl
 cd ${PROJECT_DIR}/applications/lowcode_agent

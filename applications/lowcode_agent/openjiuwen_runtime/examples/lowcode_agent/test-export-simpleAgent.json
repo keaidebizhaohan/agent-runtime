@@ -58,7 +58,7 @@
   },
   "metadata": {
     "export_time": "2026-03-05T09:54:47.966503+00:00",
-    "export_by": "ldstyle8",
+    "export_by": "test",
     "agent_studio_version": "0.1.1"
   },
   "model_references": {
@@ -67,7 +67,7 @@
       "model_type": "Qwen/Qwen3-8B",
       "name": "Qwen/Qwen3-8B",
       "base_url": "https://api.siliconflow.cn/v1",
-      "api_key": "sk-qlkairmltpvsbmtduezxulxarypnwmijgvkpnuinoqmmwgjc",
+      "api_key": "sk-xxx",
       "timeout": 300,
       "parameters": {
         "top_p": 0.9,
