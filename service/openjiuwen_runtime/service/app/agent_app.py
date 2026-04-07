@@ -62,6 +62,7 @@ class AgentApp(BaseApp):
 
         # 查询钩子
         self._query_hook: Optional[Callable] = None
+        self._agent_detail_hook: Optional[Callable] = None
 
         # 中间件列表
         self._middlewares: list = []
@@ -90,6 +91,18 @@ class AgentApp(BaseApp):
                     yield msg, last
         """
         self._query_hook = func
+        return func
+
+    def agent_detail(self, func: Callable) -> Callable:
+        """
+        Agent 详情钩子装饰器
+
+        用法:
+            @app.agent_detail
+            async def agent_detail():
+                return {"agent_name": "demo"}
+        """
+        self._agent_detail_hook = func
         return func
 
     def add_middleware(self, middleware: Middleware) -> 'AgentApp':
@@ -219,6 +232,30 @@ class AgentApp(BaseApp):
                 await self.agent.clear_session(request.conversation_id)
 
             return {"status": "ok", "message": f"Conversation {request.conversation_id} reset"}
+
+        @self.app.get("/agent_detail")
+        async def agent_detail_endpoint():
+            """
+            Agent 详情端点 - 返回当前 Agent 的 IR 详情信息
+
+            返回:
+                Agent 详情字典
+            """
+            if not self._agent_detail_hook:
+                raise HTTPException(status_code=501, detail="agent_detail hook not implemented")
+
+            try:
+                detail = self._agent_detail_hook()
+                if inspect.isawaitable(detail):
+                    detail = await detail
+                if detail is None:
+                    detail = {}
+                return detail
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Agent detail execution failed: {e}", exc_info=True)
+                raise HTTPException(status_code=500, detail=str(e))
 
         # 更新健康检查，包含 agent_loaded 状态
         # 获取原始 /health 路由
