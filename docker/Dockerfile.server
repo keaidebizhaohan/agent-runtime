@@ -38,7 +38,7 @@ ARG RUNTIME_MANAGEMENT_VERSION
 ARG RUNTIME_SERVER_VERSION
 ARG INDEX_URL
 
-RUN mkdir -p /app/dist /app/dist2
+RUN mkdir -p /app/dist
 
 RUN apt-get update && \
     apt-get install -y  --no-install-recommends \
