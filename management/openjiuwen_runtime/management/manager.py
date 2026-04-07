@@ -1,8 +1,11 @@
 import logging
 import uuid
+import asyncio
 from datetime import datetime
 from enum import Enum
 from typing import Optional, Any
+from urllib import request as urllib_request
+from urllib import error as urllib_error
 
 from openjiuwen_runtime.foundation.db.handler import DBHandler
 from .models.enums import DeploymentType, DeploymentStatus
@@ -111,6 +114,56 @@ class DeploymentManager:
         logger.debug(f"No deploy mode found for deployment_id={deployment_id}")
         return None
 
+    async def _check_health_endpoint(self, base_url: str, timeout_seconds: float = 2.0) -> bool:
+        """检查部署服务 /health 是否可访问。"""
+        url = base_url.rstrip("/") + "/health"
+
+        def _probe() -> bool:
+            req = urllib_request.Request(url, method="GET")
+            with urllib_request.urlopen(req, timeout=timeout_seconds) as resp:
+                return 200 <= resp.status < 300
+
+        try:
+            return await asyncio.to_thread(_probe)
+        except (urllib_error.URLError, TimeoutError, OSError):
+            return False
+
+    async def _wait_until_deployment_ready(
+        self,
+        deployment_id: str,
+        timeout_seconds: int = 1200,
+        interval_seconds: float = 20.0,
+    ) -> None:
+        """
+        等待部署就绪：
+        1) 状态为 running
+        2) 若存在 URL，则 /health 探活成功
+        """
+        deadline = asyncio.get_running_loop().time() + timeout_seconds
+        last_status = None
+
+        while asyncio.get_running_loop().time() < deadline:
+            deployment = await self.get_deployment(deployment_id)
+            if deployment is None:
+                raise RuntimeError(f"Deployment {deployment_id} not found while waiting for readiness")
+
+            last_status = deployment.deployment_status.value
+            if deployment.deployment_status == DeploymentStatus.RUNNING:
+                if deployment.url:
+                    if await self._check_health_endpoint(deployment.url):
+                        return
+                else:
+                    return
+
+            if deployment.deployment_status == DeploymentStatus.FAILED:
+                raise RuntimeError(f"Deployment {deployment_id} entered failed status")
+
+            await asyncio.sleep(interval_seconds)
+
+        raise RuntimeError(
+            f"Deployment {deployment_id} not ready within {timeout_seconds}s (last_status={last_status})"
+        )
+
     async def deploy_agent(
             self,
             name: str,
@@ -196,6 +249,8 @@ class DeploymentManager:
                 self.db_handler, deployment_id, version, **kwargs
             )
             await strategy.deploy(deployment_id, self.db_handler)
+
+            await self._wait_until_deployment_ready(deployment_id)
             logger.info(f"Deployment completed: deployment_id={deployment_id}, name={name}")
         except Exception as e:
             logger.error(f"Deployment failed: deployment_id={deployment_id}, error={str(e)}")

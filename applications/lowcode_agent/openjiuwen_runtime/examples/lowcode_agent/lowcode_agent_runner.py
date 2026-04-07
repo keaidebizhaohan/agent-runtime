@@ -146,8 +146,6 @@ def _setup_logging():
 logger = _setup_logging()
 VENV_PATH = _get_venv_path()
 
-FILE_PATH = ''
-
 app = AgentApp(
     app_name="LowcodeAgent",
     app_description="A lowcode agent loaded from exported JSON config",
@@ -184,6 +182,8 @@ async def init():
     logger.info(f"读取配置文件: {file_path}")
 
     export_data = _load_export_data(file_path)
+    app.ir_data = export_data
+    app.ir_file_path = file_path
     model_overrides = _get_model_overrides()
     compiler = AgentCompiler()
 
@@ -208,6 +208,28 @@ async def init():
     print(f"[OK] Agent 加载成功! Type: {type(app.agent).__name__}")
     print(f"[INFO] 使用配置文件: {file_path}")
     print(f"[INFO] 用户数据: {mask_userdata(userdata)}")
+
+
+@app.agent_detail
+async def agent_detail() -> dict:
+    """返回当前加载 Agent 的完整 IR JSON。"""
+    file_path = os.environ.get("RUNTIME_IR_PATH")
+    ir_data = getattr(app, "ir_data", None)
+
+    # 如果启动后缓存丢失，则按当前环境变量路径重新读取
+    if ir_data is None and file_path:
+        ir_data = _load_export_data(file_path)
+
+    if not ir_data:
+        return {
+            "status": "error",
+            "message": "IR data not loaded"
+        }
+    return {
+        "status": "ok",
+        "message": "success",
+        "data": ir_data,
+    }
 
 
 @app.query
