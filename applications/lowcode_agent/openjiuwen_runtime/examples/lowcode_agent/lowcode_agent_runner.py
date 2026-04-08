@@ -356,6 +356,38 @@ async def init():
             logger.info(f"正在注册工作流工厂: {getattr(workflow_factory, 'name', 'unknown')} (id={getattr(workflow_factory, 'workflow_id', 'unknown')})")
         agent.add_workflows(workflow_factories)
         logger.info(f"已通过 add_workflows 注册 {len(workflow_factories)} 个工作流工厂")
+
+        # 注意：agent.add_workflows 已经成功将 workflow 注册到 resource_mgr
+        # 不需要手动注册，因为 agent.add_workflows 内部已经处理了
+        logger.info("工作流已通过 agent.add_workflows 注册到 resource_mgr")
+
+        # 验证 workflow 是否真的被注册到 resource_mgr
+        try:
+            from openjiuwen.core.runner import Runner
+            from openjiuwen.core.workflow.base import generate_workflow_key
+            import asyncio
+
+            logger.info("验证 workflow 是否被正确注册到 resource_mgr...")
+            for workflow_factory in workflow_factories:
+                workflow_card = workflow_factory.card()
+                workflow_key = generate_workflow_key(workflow_card.id, workflow_card.version)
+
+                # 检查 resource_mgr 中是否存在该 workflow
+                has_resource = Runner.resource_mgr._tag_mgr.has_resource(workflow_key)
+                logger.info(f"Workflow {workflow_key}: has_resource={has_resource}")
+
+                # 尝试获取 workflow
+                try:
+                    loop = asyncio.get_event_loop()
+                    workflow = loop.run_until_complete(
+                        Runner.resource_mgr.get_workflow(workflow_id=workflow_key, tag=agent.agent_config.id)
+                    )
+                    logger.info(f"Workflow {workflow_key}: get_workflow returned {workflow}")
+                except Exception as e:
+                    logger.error(f"Workflow {workflow_key}: get_workflow failed: {e}")
+        except Exception as e:
+            logger.error(f"验证 workflow 注册状态时出错: {e}")
+
     elif workflow_providers:
         # 回退到 workflow_providers（没有 WorkflowFactory 包装）
         logger.info(f"准备注册 {len(workflow_providers)} 个工作流...")
