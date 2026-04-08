@@ -131,7 +131,7 @@ class DeploymentManager:
     async def _wait_until_deployment_ready(
         self,
         deployment_id: str,
-        timeout_seconds: int = 1200,
+        timeout_seconds: int = 300,
         interval_seconds: float = 20.0,
     ) -> None:
         """
