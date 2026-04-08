@@ -175,23 +175,13 @@ class AgentApp(BaseApp):
                         chunk_count = 0
                         cancel_event = asyncio.Event()
                         gen = self._query_hook(processed_messages, query_request, cancel_event)
-                        gen_anext = gen.__anext__
 
                         try:
-                            while True:
-                                # 检查客户端断开（每 100ms）
-                                try:
-                                    msg, last = await asyncio.wait_for(gen_anext(), timeout=0.1)
-                                except asyncio.TimeoutError:
-                                    # 超时后检查客户端是否断开
-                                    if await request.is_disconnected():
-                                        logger.info(f"[generate] client disconnected at chunk #{chunk_count}, stopping")
-                                        cancel_event.set()
-                                        break
-                                    continue
-                                except StopAsyncIteration:
+                            async for msg, last in gen:
+                                if await request.is_disconnected():
+                                    logger.info(f"[generate] client disconnected at chunk #{chunk_count}, stopping")
+                                    cancel_event.set()
                                     break
-
                                 chunk_count += 1
                                 processed_msg = msg
                                 for mw in self._middlewares:
