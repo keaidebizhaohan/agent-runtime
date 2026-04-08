@@ -27,6 +27,7 @@ userdata JSON 格式:
 """
 
 import json
+import copy
 import logging
 import os
 import sys
@@ -279,6 +280,50 @@ def _get_model_overrides() -> dict:
     return {}
 
 
+def _enrich_agent_workflows_with_dependency_inputs(agent_config: dict, export_data: dict) -> dict:
+    """Backfill workflow input parameters from dependencies into agent.workflows.
+
+    In multi-workflow agents, `agent.workflows` may only contain id/name/version, while
+    `dependencies.workflows` has complete `input_parameters`. WorkflowController builds
+    task inputs from agent config cards, so we must merge dependency input definitions.
+    """
+    if not isinstance(agent_config, dict):
+        return agent_config
+    dependencies = export_data.get("dependencies", {}) if isinstance(export_data, dict) else {}
+    dep_workflows = dependencies.get("workflows", [])
+    if not isinstance(dep_workflows, list) or not dep_workflows:
+        return agent_config
+
+    merged = copy.deepcopy(agent_config)
+    workflows = merged.get("workflows", [])
+    if not isinstance(workflows, list) or not workflows:
+        return merged
+
+    dep_index = {}
+    for wf in dep_workflows:
+        if not isinstance(wf, dict):
+            continue
+        wf_id = wf.get("workflow_id") or wf.get("id")
+        wf_ver = wf.get("workflow_version") or wf.get("version") or "draft"
+        if wf_id:
+            dep_index[(str(wf_id), str(wf_ver))] = wf
+            dep_index[(str(wf_id), "")] = wf
+
+    for wf in workflows:
+        if not isinstance(wf, dict):
+            continue
+        wf_id = wf.get("workflow_id") or wf.get("id")
+        wf_ver = wf.get("workflow_version") or wf.get("version") or ""
+        dep = dep_index.get((str(wf_id), str(wf_ver))) or dep_index.get((str(wf_id), ""))
+        if not dep:
+            continue
+        if not wf.get("input_params") and not wf.get("input_parameters"):
+            dep_input = dep.get("input_params") or dep.get("input_parameters") or []
+            if dep_input:
+                wf["input_parameters"] = dep_input
+    return merged
+
+
 @app.init
 async def init():
     """初始化并加载 Agent"""
@@ -334,7 +379,8 @@ async def init():
         current_user={"user_id": "test-user"}
     )
 
-    adapted_agent_config = ConfigAdapter.adapt(result["agent_config"])
+    enriched_agent_config = _enrich_agent_workflows_with_dependency_inputs(result["agent_config"], export_data)
+    adapted_agent_config = ConfigAdapter.adapt(enriched_agent_config)
     if isinstance(adapted_agent_config, LegacyReActAgentConfig):
         agent = LLMAgent(adapted_agent_config)
     elif isinstance(adapted_agent_config, LegacyWorkflowAgentConfig):
