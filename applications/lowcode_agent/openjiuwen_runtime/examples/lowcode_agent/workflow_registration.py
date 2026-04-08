@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 from typing import Callable, Iterable
 
 
@@ -34,6 +35,37 @@ def _attach_workflow_metadata(
     return provider
 
 
+def _sanitize_input_params(input_params):
+    """Normalize schema to avoid legacy controller choosing optional `query` first.
+
+    Some runtime versions pick `query` before checking `required`. If a workflow has
+    required fields like `city` and `query` is only an optional compatibility field,
+    keep required fields unchanged and drop optional `query` to prevent mis-routing.
+    """
+    if not isinstance(input_params, dict):
+        return input_params
+
+    schema = copy.deepcopy(input_params)
+    properties = schema.get("properties")
+    required = schema.get("required")
+
+    if not isinstance(properties, dict):
+        return schema
+    if not isinstance(required, list):
+        return schema
+
+    required_keys = [key for key in required if isinstance(key, str)]
+    if not required_keys:
+        return schema
+
+    has_non_query_required = any(key != "query" for key in required_keys)
+    query_is_optional = "query" in properties and "query" not in required_keys
+    if has_non_query_required and query_is_optional:
+        properties.pop("query", None)
+
+    return schema
+
+
 def normalize_workflow_providers_for_agent(
     workflow_providers: Iterable[tuple[object, Callable]],
 ) -> list[Callable]:
@@ -52,7 +84,7 @@ def normalize_workflow_providers_for_agent(
                 workflow_version=workflow_card.version,
                 workflow_name=workflow_card.name,
                 workflow_description=workflow_card.description or "",
-                input_params=workflow_card.input_params,
+                input_params=_sanitize_input_params(workflow_card.input_params),
             )
         )
     return normalized

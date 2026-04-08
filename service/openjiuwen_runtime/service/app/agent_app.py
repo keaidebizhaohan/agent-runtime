@@ -10,7 +10,9 @@ AgentApp - Agent 应用类
 import json
 import asyncio
 import logging
+import inspect
 from typing import Callable, Optional
+from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
 
 from .base_app import BaseApp

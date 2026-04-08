@@ -346,50 +346,9 @@ async def init():
     workflow_factories = result.get("workflow_factories", [])
     plugin_tools = result.get("plugin_tools", [])
 
-    # 优先使用 workflow_factories（使用 WorkflowFactory 包装）
-    # WorkflowFactory 确保每次调用工作流时都获取全新的实例，避免状态泄漏导致连续调用卡住
-    # 这是与 Studio 侧保持一致的关键修改
-    if workflow_factories:
-        logger.info(f"准备注册 {len(workflow_factories)} 个工作流工厂（WorkflowFactory 包装）...")
-        for workflow_factory in workflow_factories:
-            # workflow_factory 是 WorkflowFactory 实例，具有 id, version, name 等属性
-            logger.info(f"正在注册工作流工厂: {getattr(workflow_factory, 'name', 'unknown')} (id={getattr(workflow_factory, 'workflow_id', 'unknown')})")
-        agent.add_workflows(workflow_factories)
-        logger.info(f"已通过 add_workflows 注册 {len(workflow_factories)} 个工作流工厂")
-
-        # 注意：agent.add_workflows 已经成功将 workflow 注册到 resource_mgr
-        # 不需要手动注册，因为 agent.add_workflows 内部已经处理了
-        logger.info("工作流已通过 agent.add_workflows 注册到 resource_mgr")
-
-        # 验证 workflow 是否真的被注册到 resource_mgr
-        try:
-            from openjiuwen.core.runner import Runner
-            from openjiuwen.core.workflow.base import generate_workflow_key
-            import asyncio
-
-            logger.info("验证 workflow 是否被正确注册到 resource_mgr...")
-            for workflow_factory in workflow_factories:
-                workflow_card = workflow_factory.card()
-                workflow_key = generate_workflow_key(workflow_card.id, workflow_card.version)
-
-                # 检查 resource_mgr 中是否存在该 workflow
-                has_resource = Runner.resource_mgr._tag_mgr.has_resource(workflow_key)
-                logger.info(f"Workflow {workflow_key}: has_resource={has_resource}")
-
-                # 尝试获取 workflow
-                try:
-                    loop = asyncio.get_event_loop()
-                    workflow = loop.run_until_complete(
-                        Runner.resource_mgr.get_workflow(workflow_id=workflow_key, tag=agent.agent_config.id)
-                    )
-                    logger.info(f"Workflow {workflow_key}: get_workflow returned {workflow}")
-                except Exception as e:
-                    logger.error(f"Workflow {workflow_key}: get_workflow failed: {e}")
-        except Exception as e:
-            logger.error(f"验证 workflow 注册状态时出错: {e}")
-
-    elif workflow_providers:
-        # 回退到 workflow_providers（没有 WorkflowFactory 包装）
+    # 优先使用 workflow_providers，确保 input_params 元数据完整可见。
+    # 部分 Runtime 版本在 WorkflowFactory 路径下可能拿不到预期 schema，导致任务入参退化为 {"query": ...}。
+    if workflow_providers:
         logger.info(f"准备注册 {len(workflow_providers)} 个工作流...")
         for workflow_card, workflow_provider in workflow_providers:
             logger.info(f"正在注册工作流: {workflow_card.name} (id={workflow_card.id})")
@@ -397,6 +356,16 @@ async def init():
         normalized_workflow_providers = normalize_workflow_providers_for_agent(workflow_providers)
         agent.add_workflows(normalized_workflow_providers)
         logger.info(f"已通过 add_workflows 注册 {len(normalized_workflow_providers)} 个工作流 provider")
+    elif workflow_factories:
+        # 回退到 workflow_factories（仅当 provider 不可用）
+        logger.info(f"准备注册 {len(workflow_factories)} 个工作流工厂（WorkflowFactory 包装）...")
+        for workflow_factory in workflow_factories:
+            logger.info(
+                f"正在注册工作流工厂: {getattr(workflow_factory, 'name', 'unknown')} "
+                f"(id={getattr(workflow_factory, 'workflow_id', 'unknown')})"
+            )
+        agent.add_workflows(workflow_factories)
+        logger.info(f"已通过 add_workflows 注册 {len(workflow_factories)} 个工作流工厂")
 
     logger.info(f"准备注册 {len(plugin_tools)} 个插件工具...")
     for tool_instance in plugin_tools:
@@ -409,7 +378,7 @@ async def init():
     app.agent = agent
 
     # 统计实际注册的工作流数量
-    registered_workflow_count = len(workflow_factories) if workflow_factories else len(workflow_providers)
+    registered_workflow_count = len(workflow_providers) if workflow_providers else len(workflow_factories)
     logger.info(f"Agent 加载成功! Type: {type(app.agent).__name__}")
     logger.info(f"Agent Card: {result['agent_card'].name}")
     logger.info(f"已注册 {registered_workflow_count} 个工作流, {len(plugin_tools)} 个插件")
@@ -475,35 +444,33 @@ async def query(msgs, request) -> AsyncIterator[Tuple[dict, bool]]:
         last_text_flush_at = asyncio.get_running_loop().time()
         overall_timeout = float(os.environ.get("WORKFLOW_EXECUTE_TIMEOUT", "300"))
         deadline = asyncio.get_running_loop().time() + overall_timeout
-        pending_chunk_task = None
         stream_iter = Runner.run_agent_streaming(
             agent=app.agent,
             inputs=inputs,
             session=conversation_id
         )
 
-        while True:
-            try:
-                remaining = max(0.0, deadline - asyncio.get_running_loop().time())
-                wait_timeout = min(_STREAM_IDLE_HEARTBEAT_SECONDS, remaining)
-                if buffered_text_event is not None and buffered_text_delta:
-                    wait_timeout = min(wait_timeout, _AGUI_TEXT_DELTA_FLUSH_INTERVAL_SECONDS)
-                if wait_timeout <= 0:
-                    raise asyncio.TimeoutError
-                if pending_chunk_task is None:
-                    pending_chunk_task = asyncio.create_task(stream_iter.__anext__())
-                chunk = await asyncio.wait_for(
-                    asyncio.shield(pending_chunk_task),
-                    timeout=wait_timeout
-                )
-                pending_chunk_task = None
-            except StopAsyncIteration:
-                break
-            except asyncio.TimeoutError:
-                if asyncio.get_running_loop().time() >= deadline:
-                    if pending_chunk_task is not None:
-                        pending_chunk_task.cancel()
-                    raise
+        async with asyncio.timeout_at(deadline):
+            async for chunk in stream_iter:
+                if chunk:
+                    chunk_count += 1
+                    if logger.isEnabledFor(logging.DEBUG):
+                        logger.debug("[chunk #%s] %s", chunk_count, _summarize_chunk_for_log(chunk))
+                    events = convert_chunk_to_agui_events(
+                        chunk=chunk,
+                        trace_context=trace_context,
+                        conversation_id=conversation_id,
+                    )
+                    events, buffered_text_event, buffered_text_delta = merge_agui_events_for_stream(
+                        events,
+                        buffered_text_event,
+                        buffered_text_delta,
+                    )
+                    if events:
+                        last_text_flush_at = asyncio.get_running_loop().time()
+                    for event in events:
+                        yield event, False
+
                 if (
                     buffered_text_event is not None
                     and buffered_text_delta
@@ -516,32 +483,6 @@ async def query(msgs, request) -> AsyncIterator[Tuple[dict, bool]]:
                     last_text_flush_at = asyncio.get_running_loop().time()
                     for event in events:
                         yield event, False
-                    continue
-                logger.info(
-                    "Agent still running with no new chunks yet - conversation_id: %s, chunks=%s",
-                    conversation_id,
-                    chunk_count,
-                )
-                continue
-
-            if chunk:
-                chunk_count += 1
-                if logger.isEnabledFor(logging.DEBUG):
-                    logger.debug("[chunk #%s] %s", chunk_count, _summarize_chunk_for_log(chunk))
-                events = convert_chunk_to_agui_events(
-                    chunk=chunk,
-                    trace_context=trace_context,
-                    conversation_id=conversation_id,
-                )
-                events, buffered_text_event, buffered_text_delta = merge_agui_events_for_stream(
-                    events,
-                    buffered_text_event,
-                    buffered_text_delta,
-                )
-                if events:
-                    last_text_flush_at = asyncio.get_running_loop().time()
-                for event in events:
-                    yield event, False
 
         logger.info(f"Agent 执行完成 - conversation_id: {conversation_id}, chunks: {chunk_count}")
 
