@@ -11,8 +11,9 @@ import json
 import asyncio
 import logging
 import inspect
+import contextvars
 from typing import Callable, Optional
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from .base_app import BaseApp
@@ -141,7 +142,7 @@ class AgentApp(BaseApp):
         """注册 Agent 特定路由"""
 
         @self.app.post("/query")
-        async def query_endpoint(query_request: QueryRequest):
+        async def query_endpoint(query_request: QueryRequest, request: Request):
             """
             查询端点 - 发送消息给 Agent 并获取流式响应
 
@@ -171,24 +172,43 @@ class AgentApp(BaseApp):
                             pass
 
                     try:
-                        message_count = 0
-                        # 调用查询钩子并迭代结果
-                        async for msg, last in self._query_hook(processed_messages, query_request):
-                            message_count += 1
-                            processed_msg = msg
+                        chunk_count = 0
+                        cancel_event = asyncio.Event()
+                        gen = self._query_hook(processed_messages, query_request, cancel_event)
+                        gen_anext = gen.__anext__
 
-                            # 中间件处理
-                            for mw in self._middlewares:
+                        try:
+                            while True:
+                                # 检查客户端断开（每 100ms）
                                 try:
-                                    processed_msg = await mw.before_response(
-                                        processed_messages, query_request, processed_msg, context
-                                    )
-                                except Exception:
-                                    pass
+                                    msg, last = await asyncio.wait_for(gen_anext(), timeout=0.1)
+                                except asyncio.TimeoutError:
+                                    # 超时后检查客户端是否断开
+                                    if await request.is_disconnected():
+                                        logger.info(f"[generate] client disconnected at chunk #{chunk_count}, stopping")
+                                        cancel_event.set()
+                                        break
+                                    continue
+                                except StopAsyncIteration:
+                                    break
 
-                            # 准备 SSE 数据
-                            sse_data = f"data: {json.dumps(processed_msg, ensure_ascii=False, default=str)}\n\n"
-                            yield sse_data
+                                chunk_count += 1
+                                processed_msg = msg
+                                for mw in self._middlewares:
+                                    try:
+                                        processed_msg = await mw.before_response(
+                                            processed_messages, query_request, processed_msg, context
+                                        )
+                                    except Exception:
+                                        pass
+
+                                if chunk_count <= 3:
+                                    logger.info(f"[generate] yielding chunk #{chunk_count}, type={type(processed_msg).__name__}")
+                                yield f"data: {json.dumps(processed_msg)}\n\n"
+                        finally:
+                            cancel_event.set()
+
+                        logger.info(f"[generate] stream finished, total_chunks={chunk_count}")
 
                         # 调用 after_query 中间件
                         for mw in self._middlewares:
@@ -199,7 +219,7 @@ class AgentApp(BaseApp):
 
                         logger.info(
                             f"Query completed - conversation_id: {query_request.conversation_id}, "
-                            f"total_messages: {message_count}"
+                            f"total_messages: {chunk_count}"
                         )
 
                     except Exception as e:

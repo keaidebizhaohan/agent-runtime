@@ -411,7 +411,7 @@ async def agent_detail() -> dict:
 
 
 @app.query
-async def query(msgs, request) -> AsyncIterator[Tuple[dict, bool]]:
+async def query(msgs, request, cancel_event=None) -> AsyncIterator[Tuple[dict, bool]]:
     """处理查询请求"""
     conversation_id = request.conversation_id
     logger.info(f"收到查询请求 - conversation_id: {conversation_id}")
@@ -452,6 +452,10 @@ async def query(msgs, request) -> AsyncIterator[Tuple[dict, bool]]:
 
         async with asyncio.timeout_at(deadline):
             async for chunk in stream_iter:
+                # 检查客户端断开
+                if cancel_event and cancel_event.is_set():
+                    break
+
                 if chunk:
                     chunk_count += 1
                     if logger.isEnabledFor(logging.DEBUG):
