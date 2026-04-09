@@ -172,7 +172,6 @@ def _setup_logging():
     log_dir = os.path.join(venv_path, "logs")
     log_level_name = os.environ.get("LOWCODE_AGENT_LOG_LEVEL", "INFO").upper()
     log_level = getattr(logging, log_level_name, logging.INFO)
-    enable_console_log = os.environ.get("LOWCODE_AGENT_CONSOLE_LOG", "0").lower() in ("1", "true", "yes", "on")
     disable_global_stream_log = os.environ.get("LOWCODE_AGENT_DISABLE_GLOBAL_STREAM_LOG", "1").lower() in ("1", "true", "yes", "on")
 
     # 确保日志目录存在
@@ -199,14 +198,6 @@ def _setup_logging():
         file_handler.setFormatter(file_formatter)
         logger.addHandler(file_handler)
         _ALLOWED_LOG_HANDLER_IDS = {id(file_handler)}
-
-        # 控制台 handler（默认关闭，避免高并发时 stdout flush 阻塞）
-        if enable_console_log:
-            console_handler = logging.StreamHandler(sys.stdout)
-            console_handler.setLevel(log_level)
-            console_formatter = logging.Formatter(log_format, datefmt=date_format)
-            console_handler.setFormatter(console_formatter)
-            logger.addHandler(console_handler)
 
         # ==================== 捕获 openjiuwen 模块日志 ====================
         # 将我们的 handler 添加到 openjiuwen 的各个 logger 中
@@ -272,7 +263,6 @@ def _setup_logging():
         logger.info(f"Lowcode Agent Runner 启动")
         logger.info(f"虚拟环境路径: {venv_path}")
         logger.info(f"日志文件路径: {log_file}")
-        logger.info(f"控制台日志: {'开启' if enable_console_log else '关闭'}")
         logger.info(f"全局 StreamHandler 移除: {'开启' if disable_global_stream_log else '关闭'}")
         logger.info(f"已捕获 openjiuwen 模块日志: {', '.join(openjiuwen_loggers)}")
         logger.info("=" * 60)
