@@ -68,26 +68,27 @@ mkdir ${FINAL_DIST_DIR}
 cd ${PROJECT_DIR}/agent-studio/backend
 uv sync ${UV_EXTRA_ARGS}
 rm -rf dist
-uv build --out-dir ${FINAL_DIST_DIR}
+uv build --out-dir ${FINAL_DIST_DIR} ${UV_EXTRA_ARGS}
 
 # complie dist/openjiuwen-0.1.9-py3-none-any.whl (core library)
 if [ -d "${PROJECT_DIR}/../agent-core" ]; then
     cd ${PROJECT_DIR}/../agent-core
+    uv sync ${UV_EXTRA_ARGS}
     rm -rf dist
-    uv build --out-dir ${FINAL_DIST_DIR}
+    uv build --out-dir ${FINAL_DIST_DIR} ${UV_EXTRA_ARGS}
 fi
 
 # complie dist/lowcode_agent_runner-0.1.0-py3-none-any.whl
 cd ${PROJECT_DIR}/applications/lowcode_agent
 uv sync ${UV_EXTRA_ARGS}
 rm -rf dist
-uv build --out-dir ${FINAL_DIST_DIR}
+uv build --out-dir ${FINAL_DIST_DIR} ${UV_EXTRA_ARGS}
 
 # complie dist/openjiuwen_runtime_service-0.1.0-py3-none-any.whl
 cd ${PROJECT_DIR}/service
 uv sync ${UV_EXTRA_ARGS}
 rm -rf dist
-uv build --out-dir ${FINAL_DIST_DIR}
+uv build --out-dir ${FINAL_DIST_DIR} ${UV_EXTRA_ARGS}
 
 # Before run this, please prepare ${PROJECT_DIR}/server/.env
 cd ${PROJECT_DIR}/server
