@@ -12,6 +12,8 @@ import asyncio
 import logging
 import inspect
 import contextvars
+import time
+import uuid
 from typing import Callable, Optional
 from fastapi import HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -76,6 +78,10 @@ class AgentApp(BaseApp):
 
         # 可选服务
         self.sandbox_service = None
+
+        # 并发流状态（用于排障）
+        self._active_query_streams = 0
+        self._active_query_lock = asyncio.Lock()
 
         # 注册 Agent 特定路由
         self._register_agent_routes()
@@ -158,6 +164,19 @@ class AgentApp(BaseApp):
             # 执行查询钩子
             async def generate():
                 if self._query_hook:
+                    request_id = uuid.uuid4().hex[:8]
+                    started_at = time.perf_counter()
+
+                    async with self._active_query_lock:
+                        self._active_query_streams += 1
+                        active_streams = self._active_query_streams
+                    logger.info(
+                        "[query_start] request_id=%s conversation_id=%s active_streams=%s",
+                        request_id,
+                        query_request.conversation_id,
+                        active_streams,
+                    )
+
                     # 创建中间件上下文
                     context = MiddlewareContext()
                     processed_messages = messages
@@ -175,11 +194,36 @@ class AgentApp(BaseApp):
                         chunk_count = 0
                         cancel_event = asyncio.Event()
                         gen = self._query_hook(processed_messages, query_request, cancel_event)
+                        disconnect_watcher_task = None
+
+                        async def watch_disconnect():
+                            # 独立轮询客户端断连，避免生成器阻塞时无法及时设置 cancel_event
+                            while not cancel_event.is_set():
+                                try:
+                                    if await request.is_disconnected():
+                                        logger.info(
+                                            "[disconnect_watcher] request_id=%s conversation_id=%s client disconnected",
+                                            request_id,
+                                            query_request.conversation_id,
+                                        )
+                                        cancel_event.set()
+                                        return
+                                except Exception:
+                                    # 断连检查失败时不影响主流程
+                                    pass
+                                await asyncio.sleep(0.2)
+
+                        disconnect_watcher_task = asyncio.create_task(watch_disconnect())
 
                         try:
                             async for msg, last in gen:
                                 if await request.is_disconnected():
-                                    logger.info(f"[generate] client disconnected at chunk #{chunk_count}, stopping")
+                                    logger.info(
+                                        "[generate] request_id=%s conversation_id=%s client disconnected at chunk=%s",
+                                        request_id,
+                                        query_request.conversation_id,
+                                        chunk_count,
+                                    )
                                     cancel_event.set()
                                     break
                                 chunk_count += 1
@@ -193,12 +237,30 @@ class AgentApp(BaseApp):
                                         pass
 
                                 if chunk_count <= 3:
-                                    logger.info(f"[generate] yielding chunk #{chunk_count}, type={type(processed_msg).__name__}")
+                                    logger.info(
+                                        "[generate] request_id=%s conversation_id=%s yielding chunk=%s type=%s",
+                                        request_id,
+                                        query_request.conversation_id,
+                                        chunk_count,
+                                        type(processed_msg).__name__,
+                                    )
                                 yield f"data: {json.dumps(processed_msg)}\n\n"
                         finally:
                             cancel_event.set()
+                            if disconnect_watcher_task:
+                                disconnect_watcher_task.cancel()
+                                try:
+                                    await disconnect_watcher_task
+                                except asyncio.CancelledError:
+                                    pass
 
-                        logger.info(f"[generate] stream finished, total_chunks={chunk_count}")
+                        logger.info(
+                            "[generate_finish] request_id=%s conversation_id=%s total_chunks=%s elapsed=%.3fs",
+                            request_id,
+                            query_request.conversation_id,
+                            chunk_count,
+                            time.perf_counter() - started_at,
+                        )
 
                         # 调用 after_query 中间件
                         for mw in self._middlewares:
@@ -208,13 +270,19 @@ class AgentApp(BaseApp):
                                 pass
 
                         logger.info(
-                            f"Query completed - conversation_id: {query_request.conversation_id}, "
-                            f"total_messages: {chunk_count}"
+                            "Query completed - request_id=%s conversation_id=%s total_messages=%s elapsed=%.3fs",
+                            request_id,
+                            query_request.conversation_id,
+                            chunk_count,
+                            time.perf_counter() - started_at,
                         )
 
                     except Exception as e:
                         logger.error(
-                            f"Query execution failed - conversation_id: {query_request.conversation_id}, error: {e}",
+                            "Query execution failed - request_id=%s conversation_id=%s error=%s",
+                            request_id,
+                            query_request.conversation_id,
+                            e,
                             exc_info=True,
                         )
                         # 调用错误中间件
@@ -234,10 +302,22 @@ class AgentApp(BaseApp):
 
                     except asyncio.CancelledError:
                         logger.warning(
-                            "Query stream cancelled - conversation_id: %s",
+                            "Query stream cancelled - request_id=%s conversation_id=%s",
+                            request_id,
                             query_request.conversation_id,
                         )
                         raise
+                    finally:
+                        async with self._active_query_lock:
+                            self._active_query_streams = max(0, self._active_query_streams - 1)
+                            active_streams = self._active_query_streams
+                        logger.info(
+                            "[query_end] request_id=%s conversation_id=%s active_streams=%s elapsed=%.3fs",
+                            request_id,
+                            query_request.conversation_id,
+                            active_streams,
+                            time.perf_counter() - started_at,
+                        )
 
             return StreamingResponse(
                 generate(),
@@ -304,11 +384,20 @@ class AgentApp(BaseApp):
         @self.app.get("/health")
         async def health_with_agent():
             """健康检查（包含 Agent 状态）"""
+            started_at = time.perf_counter()
             health_data = {
                 "status": "healthy",
                 "app": self.app_name,
                 "version": self.version,
                 "agent_loaded": self.agent is not None,
+                "active_query_streams": self._active_query_streams,
             }
+            logger.info(
+                "[health] status=%s agent_loaded=%s active_streams=%s elapsed=%.3fs",
+                health_data["status"],
+                health_data["agent_loaded"],
+                health_data["active_query_streams"],
+                time.perf_counter() - started_at,
+            )
 
             return health_data

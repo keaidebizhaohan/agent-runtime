@@ -33,6 +33,9 @@ import os
 import sys
 import uuid
 import asyncio
+import threading
+import traceback
+import time
 from datetime import datetime
 from typing import AsyncIterator, Tuple
 
@@ -72,8 +75,10 @@ _userdata_env_vars = _parse_userdata_env_vars()
 
 _WORKFLOW_TIMEOUT = os.getenv("WORKFLOW_EXECUTE_TIMEOUT", "300")
 os.environ.setdefault("WORKFLOW_EXECUTE_TIMEOUT", _WORKFLOW_TIMEOUT)
-os.environ.setdefault("WORKFLOW_STREAM_FRAME_TIMEOUT", _WORKFLOW_TIMEOUT)
-os.environ.setdefault("WORKFLOW_STREAM_FIRST_FRAME_TIMEOUT", _WORKFLOW_TIMEOUT)
+# 流式首帧/帧间超时默认值不应与总超时一致（300s 会导致客户端超时后服务端长时间悬挂）。
+# 允许通过环境变量覆盖，默认 12 秒。
+os.environ.setdefault("WORKFLOW_STREAM_FRAME_TIMEOUT", "12")
+os.environ.setdefault("WORKFLOW_STREAM_FIRST_FRAME_TIMEOUT", "12")
 
 _CODE_SANDBOX_URL = os.getenv("CODE_SANDBOX_URL", "")
 if not _CODE_SANDBOX_URL:
@@ -151,25 +156,175 @@ def _get_venv_path() -> str:
     # 回退到可执行文件的父目录
     return os.path.dirname(os.path.dirname(sys.executable))
 
+_STRICT_LOGGER_HANDLER_NAMES = (
+    "common",
+    "agent",
+    "llm",
+    "tool",
+    "session",
+    "workflow",
+    "memory",
+    "retrieval",
+    "context_engine",
+    "openjiuwen_runtime.service.app.agent_app",
+)
+_ALLOWED_LOG_HANDLER_IDS: set[int] = set()
+
+
+def _sanitize_runtime_logger_handlers(reason: str) -> None:
+    """只保留白名单 handler，避免运行期动态注入阻塞型日志通道。"""
+    if not _ALLOWED_LOG_HANDLER_IDS:
+        return
+    for logger_name in _STRICT_LOGGER_HANDLER_NAMES:
+        target_logger = logging.getLogger(logger_name)
+        removed = 0
+        for h in list(target_logger.handlers):
+            if id(h) not in _ALLOWED_LOG_HANDLER_IDS:
+                target_logger.removeHandler(h)
+                removed += 1
+        target_logger.propagate = False
+        if removed > 0:
+            logging.getLogger("lowcode_agent").warning(
+                "[runtime_handler_sanitize] reason=%s logger=%s removed=%s",
+                reason,
+                logger_name,
+                removed,
+            )
+
+
 def _setup_logging():
     """配置日志系统"""
     venv_path = _get_venv_path()
     log_dir = os.path.join(venv_path, "logs")
     log_level_name = os.environ.get("LOWCODE_AGENT_LOG_LEVEL", "INFO").upper()
     log_level = getattr(logging, log_level_name, logging.INFO)
+    enable_console_log = os.environ.get("LOWCODE_AGENT_CONSOLE_LOG", "0").lower() in ("1", "true", "yes", "on")
+    disable_global_stream_log = os.environ.get("LOWCODE_AGENT_DISABLE_GLOBAL_STREAM_LOG", "1").lower() in ("1", "true", "yes", "on")
+    log_emit_slow_threshold_seconds = float(
+        os.environ.get("LOWCODE_AGENT_LOG_EMIT_SLOW_THRESHOLD_SECONDS", "0.2")
+    )
 
     # 确保日志目录存在
     os.makedirs(log_dir, exist_ok=True)
 
     log_file = os.path.join(log_dir, "agent_execution.log")
+    log_emit_diag_file = os.path.join(log_dir, "log_emit_diagnostics.log")
+    # 启动即创建诊断文件，避免“未触发慢日志就看不到文件”带来的误判
+    with open(log_emit_diag_file, "a", encoding="utf-8"):
+        pass
 
     # 配置日志格式
     log_format = "%(asctime)s | %(name)s | %(filename)s:%(lineno)d | %(levelname)s | %(message)s"
     date_format = "%Y-%m-%d %H:%M:%S"
 
+    global _ALLOWED_LOG_HANDLER_IDS
+
     # 配置 root logger
     logger = logging.getLogger("lowcode_agent")
     logger.setLevel(log_level)
+
+    def _handler_desc(handler: logging.Handler) -> str:
+        stream_name = ""
+        if hasattr(handler, "stream") and getattr(handler, "stream") is not None:
+            stream_name = getattr(getattr(handler, "stream"), "name", "")
+        return (
+            f"{type(handler).__name__}"
+            f"(level={logging.getLevelName(handler.level)}, stream={stream_name or 'n/a'})"
+        )
+
+    emit_diag_lock = threading.Lock()
+    wrapped_handler_ids: set[int] = set()
+    emit_probe_last_begin_ts: dict[str, float] = {}
+
+    def _append_emit_diag(message: str) -> None:
+        try:
+            with emit_diag_lock:
+                with open(log_emit_diag_file, "a", encoding="utf-8") as f:
+                    f.write(message + "\n")
+        except Exception:
+            pass
+
+    def _append_emit_diag_raw(message: str) -> None:
+        """低层追加写，尽量减少被 logging 自身锁链路影响。"""
+        try:
+            fd = os.open(log_emit_diag_file, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+            try:
+                os.write(fd, (message + "\n").encode("utf-8", errors="ignore"))
+            finally:
+                os.close(fd)
+        except Exception:
+            pass
+
+    def _install_emit_probe(logger_name: str, target_logger: logging.Logger) -> None:
+        for handler in list(target_logger.handlers):
+            hid = id(handler)
+            if hid in wrapped_handler_ids:
+                continue
+            original_emit = handler.emit
+            handler_name = type(handler).__name__
+            stream_name = ""
+            if hasattr(handler, "stream") and getattr(handler, "stream") is not None:
+                stream_name = getattr(getattr(handler, "stream"), "name", "")
+
+            def _emit_with_probe(record, _orig=original_emit, _lname=logger_name, _hname=handler_name, _sname=stream_name):
+                started = time.perf_counter()
+                try:
+                    return _orig(record)
+                finally:
+                    elapsed = time.perf_counter() - started
+                    if elapsed >= log_emit_slow_threshold_seconds:
+                        _append_emit_diag(
+                            f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | "
+                            f"logger={_lname or 'root'} handler={_hname} stream={_sname or 'n/a'} "
+                            f"level={record.levelname} elapsed={elapsed:.3f}s msg={record.getMessage()[:200]}"
+                        )
+
+            handler.emit = _emit_with_probe
+            wrapped_handler_ids.add(hid)
+
+    # 全局兜底探针：覆盖所有 Handler（包括运行期动态创建的 handler）
+    # 仅记录耗时，不改变原语义，避免遗漏未被 _install_emit_probe 扫描到的 logger/handler。
+    if not getattr(logging.Handler, "_lowcode_probe_patched", False):
+        original_handle = logging.Handler.handle
+
+        def _handle_with_probe(self, record):
+            # 进入 handle 前先落一条 begin，避免卡在 flush 时 finally 无法执行导致无诊断。
+            # 节流：同一 logger/handler 每秒最多 1 条 begin。
+            logger_name = record.name or "root"
+            handler_name = type(self).__name__
+            begin_key = f"{logger_name}:{handler_name}"
+            now = time.perf_counter()
+            last_ts = emit_probe_last_begin_ts.get(begin_key, 0.0)
+            if (now - last_ts) >= 1.0 and (
+                logger_name.startswith("common")
+                or logger_name.startswith("llm")
+                or logger_name.startswith("session")
+                or logger_name.startswith("openjiuwen")
+            ):
+                stream_name = ""
+                if hasattr(self, "stream") and getattr(self, "stream") is not None:
+                    stream_name = getattr(getattr(self, "stream"), "name", "")
+                _append_emit_diag_raw(
+                    f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | "
+                    f"BEGIN logger={logger_name} handler={handler_name} stream={stream_name or 'n/a'} "
+                    f"level={record.levelname} msg={record.getMessage()[:200]}"
+                )
+                emit_probe_last_begin_ts[begin_key] = now
+
+            started = time.perf_counter()
+            try:
+                return original_handle(self, record)
+            finally:
+                elapsed = time.perf_counter() - started
+                if elapsed >= log_emit_slow_threshold_seconds:
+                    _append_emit_diag(
+                        f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | "
+                        f"logger={record.name or 'root'} handler={type(self).__name__} "
+                        f"level={record.levelname} elapsed={elapsed:.3f}s msg={record.getMessage()[:200]}"
+                    )
+
+        logging.Handler.handle = _handle_with_probe
+        setattr(logging.Handler, "_lowcode_probe_patched", True)
 
     # 避免重复添加 handler
     if not logger.handlers:
@@ -179,13 +334,15 @@ def _setup_logging():
         file_formatter = logging.Formatter(log_format, datefmt=date_format)
         file_handler.setFormatter(file_formatter)
         logger.addHandler(file_handler)
+        _ALLOWED_LOG_HANDLER_IDS = {id(file_handler)}
 
-        # 控制台 handler
-        console_handler = logging.StreamHandler(sys.stdout)
-        console_handler.setLevel(log_level)
-        console_formatter = logging.Formatter(log_format, datefmt=date_format)
-        console_handler.setFormatter(console_formatter)
-        logger.addHandler(console_handler)
+        # 控制台 handler（默认关闭，避免高并发时 stdout flush 阻塞事件循环）
+        if enable_console_log:
+            console_handler = logging.StreamHandler(sys.stdout)
+            console_handler.setLevel(log_level)
+            console_formatter = logging.Formatter(log_format, datefmt=date_format)
+            console_handler.setFormatter(console_formatter)
+            logger.addHandler(console_handler)
 
         # ==================== 捕获 openjiuwen 模块日志 ====================
         # 将我们的 handler 添加到 openjiuwen 的各个 logger 中
@@ -209,11 +366,89 @@ def _setup_logging():
             # 添加文件 handler（不添加控制台 handler，避免重复输出）
             oj_logger.addHandler(file_handler)
             oj_logger.setLevel(log_level)
+            # 切断向 root logger 传播，避免命中其他 StreamHandler 导致阻塞
+            oj_logger.propagate = False
+
+        # 防止运行时二次挂载 stdout/server 日志 handler 导致 flush 阻塞
+        original_add_handler = logging.Logger.addHandler
+        if not getattr(logging.Logger, "_lowcode_strict_add_handler_patched", False):
+            def _strict_add_handler(self, hdlr):
+                target_name = getattr(self, "name", "")
+                if target_name in _STRICT_LOGGER_HANDLER_NAMES and id(hdlr) not in _ALLOWED_LOG_HANDLER_IDS:
+                    logger.warning(
+                        "[runtime_handler_blocked] logger=%s handler=%s stream=%s",
+                        target_name,
+                        type(hdlr).__name__,
+                        getattr(getattr(hdlr, "stream", None), "name", "n/a"),
+                    )
+                    return
+                return original_add_handler(self, hdlr)
+            logging.Logger.addHandler = _strict_add_handler
+            setattr(logging.Logger, "_lowcode_strict_add_handler_patched", True)
+
+        if disable_global_stream_log:
+            # 先清理 openjiuwen 相关 logger 上的 stdout/stderr StreamHandler（保留 FileHandler）
+            prune_logger_names = list(dict.fromkeys(openjiuwen_loggers + ["openjiuwen", "lowcode_agent"]))
+            for name in prune_logger_names:
+                target_logger = logging.getLogger(name)
+                removed = 0
+                for h in list(target_logger.handlers):
+                    if isinstance(h, logging.StreamHandler) and not isinstance(h, logging.FileHandler):
+                        target_logger.removeHandler(h)
+                        removed += 1
+                if removed > 0:
+                    logger.info(
+                        "已移除非文件 StreamHandler - logger=%s removed=%s",
+                        name,
+                        removed,
+                    )
+
+            target_logger_names = ["", "root", "uvicorn", "uvicorn.error", "uvicorn.access"]
+            for name in target_logger_names:
+                target_logger = logging.getLogger(name)
+                removed = 0
+                for h in list(target_logger.handlers):
+                    if isinstance(h, logging.StreamHandler) and not isinstance(h, logging.FileHandler):
+                        target_logger.removeHandler(h)
+                        removed += 1
+                if removed > 0:
+                    logger.info(
+                        "已移除非文件 StreamHandler - logger=%s removed=%s",
+                        name or "root",
+                        removed,
+                    )
+
+        _sanitize_runtime_logger_handlers(reason="startup")
+
+        # 输出关键 logger 的 handler 详情，便于定位异常日志通道
+        inspect_logger_names = [
+            "",
+            "lowcode_agent",
+            "session",
+            "common",
+            "uvicorn",
+            "uvicorn.error",
+            "uvicorn.access",
+        ]
+        for name in inspect_logger_names:
+            inspect_logger = logging.getLogger(name)
+            handlers_desc = ", ".join(_handler_desc(h) for h in inspect_logger.handlers) or "no-handlers"
+            logger.info(
+                "logger_handlers - logger=%s propagate=%s handlers=[%s]",
+                name or "root",
+                inspect_logger.propagate,
+                handlers_desc,
+            )
+            _install_emit_probe(name or "root", inspect_logger)
 
         logger.info("=" * 60)
         logger.info(f"Lowcode Agent Runner 启动")
         logger.info(f"虚拟环境路径: {venv_path}")
         logger.info(f"日志文件路径: {log_file}")
+        logger.info(f"控制台日志: {'开启' if enable_console_log else '关闭'}")
+        logger.info(f"全局 StreamHandler 移除: {'开启' if disable_global_stream_log else '关闭'}")
+        logger.info(f"慢日志探针文件: {log_emit_diag_file}")
+        logger.info(f"慢日志阈值: {log_emit_slow_threshold_seconds:.3f}s")
         logger.info(f"已捕获 openjiuwen 模块日志: {', '.join(openjiuwen_loggers)}")
         logger.info("=" * 60)
 
@@ -254,6 +489,20 @@ def _summarize_chunk_for_log(chunk) -> str:
 
     return ", ".join(summary)
 
+
+def _log_main_thread_stack(prefix: str) -> None:
+    """从后台线程抓取主线程堆栈，定位卡死位置。"""
+    try:
+        frames = sys._current_frames()
+        main_frame = frames.get(_MAIN_THREAD_ID) if _MAIN_THREAD_ID is not None else None
+        if not main_frame:
+            logger.warning("%s | 无法获取主线程栈", prefix)
+            return
+        stack_text = "".join(traceback.format_stack(main_frame))
+        logger.error("%s | 主线程栈:\n%s", prefix, stack_text)
+    except Exception:
+        logger.exception("%s | 抓取主线程栈失败", prefix)
+
 # 初始化 logger
 logger = _setup_logging()
 VENV_PATH = _get_venv_path()
@@ -263,6 +512,16 @@ _STREAM_IDLE_HEARTBEAT_SECONDS = 15.0
 _AGUI_TEXT_DELTA_FLUSH_INTERVAL_SECONDS = float(
     os.environ.get("AGUI_TEXT_DELTA_FLUSH_INTERVAL_SECONDS", "0.12")
 )
+_STREAM_WAIT_DIAGNOSTIC_INTERVAL_SECONDS = float(
+    os.environ.get("WORKFLOW_STREAM_WAIT_DIAGNOSTIC_INTERVAL_SECONDS", "3")
+)
+_STREAM_NEXT_POLL_SECONDS = float(
+    os.environ.get("WORKFLOW_STREAM_NEXT_POLL_SECONDS", "0.8")
+)
+_STREAM_BLOCK_STACK_DUMP_SECONDS = float(
+    os.environ.get("WORKFLOW_STREAM_BLOCK_STACK_DUMP_SECONDS", "4")
+)
+_MAIN_THREAD_ID = threading.main_thread().ident
 
 app = AgentApp(
     app_name="LowcodeAgent",
@@ -460,6 +719,7 @@ async def agent_detail() -> dict:
 async def query(msgs, request, cancel_event=None) -> AsyncIterator[Tuple[dict, bool]]:
     """处理查询请求"""
     conversation_id = request.conversation_id
+    _sanitize_runtime_logger_handlers(reason=f"query_start:{conversation_id}")
     logger.info(f"收到查询请求 - conversation_id: {conversation_id}")
 
     trace_context = agui_trace_context(msgs or [])
@@ -483,27 +743,128 @@ async def query(msgs, request, cancel_event=None) -> AsyncIterator[Tuple[dict, b
     logger.info(f"用户查询内容: {last_user_msg[:100]}...")
     inputs = {"query": last_user_msg}
 
+    stream_iter = None
+    cancelled_by_client = False
+    timeout_stage = "unknown"
+    timeout_limit = None
     try:
         chunk_count = 0
         buffered_text_event = None
         buffered_text_delta = ""
-        last_text_flush_at = asyncio.get_running_loop().time()
+        loop = asyncio.get_running_loop()
+        last_text_flush_at = loop.time()
+        last_chunk_at = loop.time()
+        last_wait_diag_at = loop.time()
         overall_timeout = float(os.environ.get("WORKFLOW_EXECUTE_TIMEOUT", "300"))
-        deadline = asyncio.get_running_loop().time() + overall_timeout
-        stream_iter = Runner.run_agent_streaming(
+        first_frame_timeout = float(os.environ.get("WORKFLOW_STREAM_FIRST_FRAME_TIMEOUT", str(overall_timeout)))
+        frame_timeout = float(os.environ.get("WORKFLOW_STREAM_FRAME_TIMEOUT", str(overall_timeout)))
+        deadline = loop.time() + overall_timeout
+        logger.info(
+            "流式超时配置 - conversation_id=%s overall=%.2fs first_frame=%.2fs frame=%.2fs",
+            conversation_id,
+            overall_timeout,
+            first_frame_timeout,
+            frame_timeout,
+        )
+        logger.info("开始创建流迭代器 - conversation_id=%s", conversation_id)
+        create_iter_started_at = loop.time()
+        stream_iter = await asyncio.to_thread(
+            Runner.run_agent_streaming,
             agent=app.agent,
             inputs=inputs,
-            session=conversation_id
+            session=conversation_id,
         )
+        logger.info(
+            "流迭代器创建完成 - conversation_id=%s elapsed=%.3fs",
+            conversation_id,
+            loop.time() - create_iter_started_at,
+        )
+        first_chunk_received = False
 
         async with asyncio.timeout_at(deadline):
-            async for chunk in stream_iter:
-                # 检查客户端断开
+            while True:
+                # 即使底层还没产出 chunk，也要优先处理客户端断连，避免悬挂协程
                 if cancel_event and cancel_event.is_set():
+                    cancelled_by_client = True
+                    logger.info(f"客户端已断开，停止处理 - conversation_id: {conversation_id}")
+                    break
+
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    raise asyncio.TimeoutError()
+
+                next_timeout = min(
+                    first_frame_timeout if not first_chunk_received else frame_timeout,
+                    remaining,
+                )
+                timeout_stage = "first_frame" if not first_chunk_received else "next_frame"
+                timeout_limit = next_timeout
+                stage_started_at = loop.time()
+                chunk = None
+                reached_stream_end = False
+
+                if (loop.time() - last_wait_diag_at) >= _STREAM_WAIT_DIAGNOSTIC_INTERVAL_SECONDS:
+                    logger.info(
+                        "等待流式输出中 - conversation_id=%s stage=%s chunks=%s waited_since_last_chunk=%.3fs remaining=%.3fs",
+                        conversation_id,
+                        timeout_stage,
+                        chunk_count,
+                        loop.time() - last_chunk_at,
+                        remaining,
+                    )
+                    last_wait_diag_at = loop.time()
+
+                while True:
+                    if cancel_event and cancel_event.is_set():
+                        cancelled_by_client = True
+                        logger.info(f"客户端已断开（等待下一帧中），停止处理 - conversation_id: {conversation_id}")
+                        break
+
+                    elapsed_for_stage = loop.time() - stage_started_at
+                    stage_remaining = next_timeout - elapsed_for_stage
+                    overall_remaining = deadline - loop.time()
+                    poll_timeout = min(_STREAM_NEXT_POLL_SECONDS, stage_remaining, overall_remaining)
+                    if poll_timeout <= 0:
+                        raise asyncio.TimeoutError()
+
+                    block_watchdog = None
+                    try:
+                        if _STREAM_BLOCK_STACK_DUMP_SECONDS > 0:
+                            block_watchdog = threading.Timer(
+                                _STREAM_BLOCK_STACK_DUMP_SECONDS,
+                                _log_main_thread_stack,
+                                kwargs={
+                                    "prefix": (
+                                        f"[stream_block_watchdog] conversation_id={conversation_id} "
+                                        f"stage={timeout_stage} poll_timeout={poll_timeout:.3f}s "
+                                        f"chunk_count={chunk_count}"
+                                    )
+                                },
+                            )
+                            block_watchdog.daemon = True
+                            block_watchdog.start()
+                        try:
+                            async with asyncio.timeout(poll_timeout):
+                                chunk = await stream_iter.__anext__()
+                        except TimeoutError:
+                            # 细粒度轮询：允许尽快感知客户端断连，而不是一次性等待 12 秒
+                            continue
+                        except StopAsyncIteration:
+                            reached_stream_end = True
+                            break
+                    finally:
+                        if block_watchdog:
+                            block_watchdog.cancel()
+
+                if cancelled_by_client:
+                    break
+                if reached_stream_end:
                     break
 
                 if chunk:
+                    first_chunk_received = True
                     chunk_count += 1
+                    last_chunk_at = loop.time()
                     if logger.isEnabledFor(logging.DEBUG):
                         logger.debug("[chunk #%s] %s", chunk_count, _summarize_chunk_for_log(chunk))
                     events = convert_chunk_to_agui_events(
@@ -517,27 +878,33 @@ async def query(msgs, request, cancel_event=None) -> AsyncIterator[Tuple[dict, b
                         buffered_text_delta,
                     )
                     if events:
-                        last_text_flush_at = asyncio.get_running_loop().time()
+                        last_text_flush_at = loop.time()
                     for event in events:
                         yield event, False
 
                 if (
                     buffered_text_event is not None
                     and buffered_text_delta
-                    and (asyncio.get_running_loop().time() - last_text_flush_at) >= _AGUI_TEXT_DELTA_FLUSH_INTERVAL_SECONDS
+                    and (loop.time() - last_text_flush_at) >= _AGUI_TEXT_DELTA_FLUSH_INTERVAL_SECONDS
                 ):
                     events, buffered_text_event, buffered_text_delta = flush_buffered_agui_text_events(
                         buffered_text_event,
                         buffered_text_delta,
                     )
-                    last_text_flush_at = asyncio.get_running_loop().time()
+                    last_text_flush_at = loop.time()
                     for event in events:
                         yield event, False
 
         logger.info(f"Agent 执行完成 - conversation_id: {conversation_id}, chunks: {chunk_count}")
 
     except asyncio.TimeoutError:
-        logger.error(f"Agent 执行超时 - conversation_id: {conversation_id}")
+        logger.error(
+            "Agent 执行超时 - conversation_id=%s stage=%s timeout=%.3fs chunks=%s",
+            conversation_id,
+            timeout_stage,
+            timeout_limit or -1.0,
+            chunk_count if 'chunk_count' in locals() else -1,
+        )
         events = agui_error_events(
             trace_context=trace_context,
             conversation_id=conversation_id,
@@ -553,6 +920,15 @@ async def query(msgs, request, cancel_event=None) -> AsyncIterator[Tuple[dict, b
         raise
 
     except Exception as e:
+        err_text = str(e)
+        if "created in a different Context" in err_text and "ContextVar" in err_text:
+            logger.error(
+                "[contextvar_context_mismatch] conversation_id=%s stage=%s chunks=%s error=%s",
+                conversation_id,
+                timeout_stage,
+                chunk_count if 'chunk_count' in locals() else -1,
+                err_text,
+            )
         logger.error(f"Agent 执行出错 - conversation_id: {conversation_id}, error: {str(e)}", exc_info=True)
         events = agui_error_events(
             trace_context=trace_context,
@@ -562,6 +938,18 @@ async def query(msgs, request, cancel_event=None) -> AsyncIterator[Tuple[dict, b
         )
         for i, event in enumerate(events):
             yield event, i == len(events) - 1
+        return
+
+    finally:
+        if stream_iter is not None:
+            try:
+                logger.info("关闭流迭代器 - conversation_id=%s", conversation_id)
+                await stream_iter.aclose()
+            except Exception:
+                # 忽略清理阶段异常，避免覆盖主流程错误
+                logger.warning("关闭流迭代器失败 - conversation_id=%s", conversation_id, exc_info=True)
+
+    if cancelled_by_client:
         return
 
     # 检查是否没有任何chunk输出，目前报错会被底层吞掉，不会走到except，无法被捕获
