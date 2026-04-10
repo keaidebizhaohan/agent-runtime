@@ -72,8 +72,9 @@ _userdata_env_vars = _parse_userdata_env_vars()
 
 _WORKFLOW_TIMEOUT = os.getenv("WORKFLOW_EXECUTE_TIMEOUT", "300")
 os.environ.setdefault("WORKFLOW_EXECUTE_TIMEOUT", _WORKFLOW_TIMEOUT)
-os.environ.setdefault("WORKFLOW_STREAM_FRAME_TIMEOUT", _WORKFLOW_TIMEOUT)
-os.environ.setdefault("WORKFLOW_STREAM_FIRST_FRAME_TIMEOUT", _WORKFLOW_TIMEOUT)
+# 流式首帧/帧间超时默认值不应与总超时一致（300s 会导致客户端超时后服务端长时间悬挂）
+os.environ.setdefault("WORKFLOW_STREAM_FRAME_TIMEOUT", "12")
+os.environ.setdefault("WORKFLOW_STREAM_FIRST_FRAME_TIMEOUT", "12")
 
 _CODE_SANDBOX_URL = os.getenv("CODE_SANDBOX_URL", "")
 if not _CODE_SANDBOX_URL:
@@ -103,6 +104,20 @@ from openjiuwen_runtime.examples.lowcode_agent.agui_converter import (
 from openjiuwen_runtime.examples.lowcode_agent.workflow_registration import (
     normalize_workflow_providers_for_agent,
 )
+
+_STRICT_LOGGER_HANDLER_NAMES = (
+    "common",
+    "agent",
+    "llm",
+    "tool",
+    "session",
+    "workflow",
+    "memory",
+    "retrieval",
+    "context_engine",
+    "openjiuwen_runtime.service.app.agent_app",
+)
+_ALLOWED_LOG_HANDLER_IDS: set[int] = set()
 
 
 # ==================== 日志脱敏工具 ====================
@@ -157,6 +172,7 @@ def _setup_logging():
     log_dir = os.path.join(venv_path, "logs")
     log_level_name = os.environ.get("LOWCODE_AGENT_LOG_LEVEL", "INFO").upper()
     log_level = getattr(logging, log_level_name, logging.INFO)
+    disable_global_stream_log = os.environ.get("LOWCODE_AGENT_DISABLE_GLOBAL_STREAM_LOG", "1").lower() in ("1", "true", "yes", "on")
 
     # 确保日志目录存在
     os.makedirs(log_dir, exist_ok=True)
@@ -166,6 +182,8 @@ def _setup_logging():
     # 配置日志格式
     log_format = "%(asctime)s | %(name)s | %(filename)s:%(lineno)d | %(levelname)s | %(message)s"
     date_format = "%Y-%m-%d %H:%M:%S"
+
+    global _ALLOWED_LOG_HANDLER_IDS
 
     # 配置 root logger
     logger = logging.getLogger("lowcode_agent")
@@ -179,13 +197,7 @@ def _setup_logging():
         file_formatter = logging.Formatter(log_format, datefmt=date_format)
         file_handler.setFormatter(file_formatter)
         logger.addHandler(file_handler)
-
-        # 控制台 handler
-        console_handler = logging.StreamHandler(sys.stdout)
-        console_handler.setLevel(log_level)
-        console_formatter = logging.Formatter(log_format, datefmt=date_format)
-        console_handler.setFormatter(console_formatter)
-        logger.addHandler(console_handler)
+        _ALLOWED_LOG_HANDLER_IDS = {id(file_handler)}
 
         # ==================== 捕获 openjiuwen 模块日志 ====================
         # 将我们的 handler 添加到 openjiuwen 的各个 logger 中
@@ -209,11 +221,49 @@ def _setup_logging():
             # 添加文件 handler（不添加控制台 handler，避免重复输出）
             oj_logger.addHandler(file_handler)
             oj_logger.setLevel(log_level)
+            # 切断向 root 传播，避免命中外部 StreamHandler
+            oj_logger.propagate = False
+
+        # 防止运行时再次挂载 stdout / 其他文件 handler 导致 flush 阻塞
+        original_add_handler = logging.Logger.addHandler
+        if not getattr(logging.Logger, "_lowcode_strict_add_handler_patched", False):
+            def _strict_add_handler(self, hdlr):
+                target_name = getattr(self, "name", "")
+                if target_name in _STRICT_LOGGER_HANDLER_NAMES and id(hdlr) not in _ALLOWED_LOG_HANDLER_IDS:
+                    return
+                return original_add_handler(self, hdlr)
+            logging.Logger.addHandler = _strict_add_handler
+            setattr(logging.Logger, "_lowcode_strict_add_handler_patched", True)
+
+        if disable_global_stream_log:
+            # 清理 openjiuwen 相关 logger 上的 stdout/stderr StreamHandler（保留 FileHandler）
+            prune_logger_names = list(dict.fromkeys(openjiuwen_loggers + ["openjiuwen", "lowcode_agent"]))
+            for name in prune_logger_names:
+                target_logger = logging.getLogger(name)
+                for h in list(target_logger.handlers):
+                    if isinstance(h, logging.StreamHandler) and not isinstance(h, logging.FileHandler):
+                        target_logger.removeHandler(h)
+
+        # 启动后再做一次白名单收敛，确保仅保留 deploy 内文件日志 handler
+        for logger_name in _STRICT_LOGGER_HANDLER_NAMES:
+            target_logger = logging.getLogger(logger_name)
+            for h in list(target_logger.handlers):
+                if id(h) not in _ALLOWED_LOG_HANDLER_IDS:
+                    target_logger.removeHandler(h)
+            target_logger.propagate = False
+
+            # 同时清理 root/uvicorn 上的非文件 StreamHandler
+            for name in ["", "root", "uvicorn", "uvicorn.error", "uvicorn.access"]:
+                target_logger = logging.getLogger(name)
+                for h in list(target_logger.handlers):
+                    if isinstance(h, logging.StreamHandler) and not isinstance(h, logging.FileHandler):
+                        target_logger.removeHandler(h)
 
         logger.info("=" * 60)
         logger.info(f"Lowcode Agent Runner 启动")
         logger.info(f"虚拟环境路径: {venv_path}")
         logger.info(f"日志文件路径: {log_file}")
+        logger.info(f"全局 StreamHandler 移除: {'开启' if disable_global_stream_log else '关闭'}")
         logger.info(f"已捕获 openjiuwen 模块日志: {', '.join(openjiuwen_loggers)}")
         logger.info("=" * 60)
 
@@ -460,6 +510,14 @@ async def agent_detail() -> dict:
 async def query(msgs, request, cancel_event=None) -> AsyncIterator[Tuple[dict, bool]]:
     """处理查询请求"""
     conversation_id = request.conversation_id
+    # 每个请求入口都做一次收敛，防止运行期动态注入阻塞日志 handler
+    if _ALLOWED_LOG_HANDLER_IDS:
+        for logger_name in _STRICT_LOGGER_HANDLER_NAMES:
+            target_logger = logging.getLogger(logger_name)
+            for h in list(target_logger.handlers):
+                if id(h) not in _ALLOWED_LOG_HANDLER_IDS:
+                    target_logger.removeHandler(h)
+            target_logger.propagate = False
     logger.info(f"收到查询请求 - conversation_id: {conversation_id}")
 
     trace_context = agui_trace_context(msgs or [])
@@ -488,21 +546,42 @@ async def query(msgs, request, cancel_event=None) -> AsyncIterator[Tuple[dict, b
         buffered_text_event = None
         buffered_text_delta = ""
         last_text_flush_at = asyncio.get_running_loop().time()
+        loop = asyncio.get_running_loop()
         overall_timeout = float(os.environ.get("WORKFLOW_EXECUTE_TIMEOUT", "300"))
-        deadline = asyncio.get_running_loop().time() + overall_timeout
-        stream_iter = Runner.run_agent_streaming(
+        first_frame_timeout = float(os.environ.get("WORKFLOW_STREAM_FIRST_FRAME_TIMEOUT", str(overall_timeout)))
+        frame_timeout = float(os.environ.get("WORKFLOW_STREAM_FRAME_TIMEOUT", str(overall_timeout)))
+        deadline = loop.time() + overall_timeout
+        stream_iter = await asyncio.to_thread(
+            Runner.run_agent_streaming,
             agent=app.agent,
             inputs=inputs,
-            session=conversation_id
+            session=conversation_id,
         )
 
         async with asyncio.timeout_at(deadline):
-            async for chunk in stream_iter:
+            first_chunk_received = False
+            while True:
                 # 检查客户端断开
                 if cancel_event and cancel_event.is_set():
                     break
 
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    raise asyncio.TimeoutError()
+
+                next_timeout = min(
+                    first_frame_timeout if not first_chunk_received else frame_timeout,
+                    remaining,
+                )
+
+                try:
+                    async with asyncio.timeout(next_timeout):
+                        chunk = await stream_iter.__anext__()
+                except StopAsyncIteration:
+                    break
+
                 if chunk:
+                    first_chunk_received = True
                     chunk_count += 1
                     if logger.isEnabledFor(logging.DEBUG):
                         logger.debug("[chunk #%s] %s", chunk_count, _summarize_chunk_for_log(chunk))
@@ -517,20 +596,20 @@ async def query(msgs, request, cancel_event=None) -> AsyncIterator[Tuple[dict, b
                         buffered_text_delta,
                     )
                     if events:
-                        last_text_flush_at = asyncio.get_running_loop().time()
+                        last_text_flush_at = loop.time()
                     for event in events:
                         yield event, False
 
                 if (
                     buffered_text_event is not None
                     and buffered_text_delta
-                    and (asyncio.get_running_loop().time() - last_text_flush_at) >= _AGUI_TEXT_DELTA_FLUSH_INTERVAL_SECONDS
+                    and (loop.time() - last_text_flush_at) >= _AGUI_TEXT_DELTA_FLUSH_INTERVAL_SECONDS
                 ):
                     events, buffered_text_event, buffered_text_delta = flush_buffered_agui_text_events(
                         buffered_text_event,
                         buffered_text_delta,
                     )
-                    last_text_flush_at = asyncio.get_running_loop().time()
+                    last_text_flush_at = loop.time()
                     for event in events:
                         yield event, False
 
