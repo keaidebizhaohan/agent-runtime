@@ -6,6 +6,7 @@ from enum import Enum
 from typing import Optional, Any
 from urllib import request as urllib_request
 from urllib import error as urllib_error
+from urllib.parse import urlparse, urlunparse
 
 from openjiuwen_runtime.foundation.db.handler import DBHandler
 from .models.enums import DeploymentType, DeploymentStatus
@@ -114,19 +115,46 @@ class DeploymentManager:
         logger.debug(f"No deploy mode found for deployment_id={deployment_id}")
         return None
 
+    @staticmethod
+    def _health_url_with_loopback_host(base_url: str) -> Optional[str]:
+        """
+        将 base_url 的主机替换为 127.0.0.1，用于配置 IP 被本机访问策略拦截时的探活兜底。
+        若已是环回地址或无法解析主机，则返回 None。
+        """
+        parsed = urlparse(base_url.rstrip("/") + "/")
+        host = parsed.hostname
+        if not host:
+            return None
+        if host in ("127.0.0.1", "localhost", "::1"):
+            return None
+        port = parsed.port
+        netloc = f"127.0.0.1:{port}" if port is not None else "127.0.0.1"
+        replaced = urlunparse(
+            (parsed.scheme, netloc, parsed.path.rstrip("/") or "", "", "", "")
+        ).rstrip("/")
+        return replaced + "/health"
+
     async def _check_health_endpoint(self, base_url: str, timeout_seconds: float = 2.0) -> bool:
-        """检查部署服务 /health 是否可访问。"""
+        """检查部署服务 /health 是否可访问；主 URL 失败时再尝试 127.0.0.1 同端口兜底。"""
         url = base_url.rstrip("/") + "/health"
 
-        def _probe() -> bool:
-            req = urllib_request.Request(url, method="GET")
+        def _probe(target: str) -> bool:
+            req = urllib_request.Request(target, method="GET")
             with urllib_request.urlopen(req, timeout=timeout_seconds) as resp:
                 return 200 <= resp.status < 300
 
-        try:
-            return await asyncio.to_thread(_probe)
-        except (urllib_error.URLError, TimeoutError, OSError):
-            return False
+        async def _try_once(target: str) -> bool:
+            try:
+                return await asyncio.to_thread(_probe, target)
+            except (urllib_error.URLError, TimeoutError, OSError):
+                return False
+
+        if await _try_once(url):
+            return True
+        fallback = self._health_url_with_loopback_host(base_url)
+        if fallback and fallback != url:
+            return await _try_once(fallback)
+        return False
 
     async def _wait_until_deployment_ready(
         self,
