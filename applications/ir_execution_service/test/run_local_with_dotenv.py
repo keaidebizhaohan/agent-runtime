@@ -1,4 +1,7 @@
 #!/usr/bin/env python
+# coding: utf-8
+# Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
+
 # -*- coding: utf-8 -*-
 """本地测试入口：加载服务根目录 .env，补齐 OBS 占位，IR 根目录为本脚本所在 test/，再启动服务。
 

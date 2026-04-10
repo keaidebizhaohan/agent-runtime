@@ -1,5 +1,7 @@
 # coding: utf-8
-# Copyright (c) Huawei Technologies Co., Ltd. 2025-2025. All rights reserved.
+# Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
+
+# Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved.
 
 """LongTermMemory 单例：向量存储、Embedding、作用域配置，从进程环境变量读取。
 

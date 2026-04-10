@@ -1,3 +1,6 @@
+# coding: utf-8
+# Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
+
 """部署模块基础数据结构"""
 
 from dataclasses import dataclass, field

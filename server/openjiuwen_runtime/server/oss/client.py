@@ -1,3 +1,6 @@
+# coding: utf-8
+# Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
+
 """OSS Client (Mock)
 
 用于模拟 OSS 文件上传功能

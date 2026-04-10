@@ -1,5 +1,7 @@
 # coding: utf-8
-# Copyright (c) Huawei Technologies Co., Ltd. 2025-2025. All rights reserved.
+# Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
+
+# Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved.
 
 """启动前环境准备：不为进程加载 .env 文件，仅根据类型键写入默认并校验必填项。
 

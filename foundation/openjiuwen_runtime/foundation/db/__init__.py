@@ -1,3 +1,6 @@
+# coding: utf-8
+# Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
+
 from .handler import DBHandler
 from .sqlalchemy_handler import SQLAlchemyHandler
 from .mysql_handler import MySQLHandler

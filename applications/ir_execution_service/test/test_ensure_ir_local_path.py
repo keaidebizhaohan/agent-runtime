@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# coding: utf-8
+# Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
+
 # -*- coding: utf-8 -*-
 """手动测试 runtime_support.ir_fetch.ensure_ir_local_path。
 

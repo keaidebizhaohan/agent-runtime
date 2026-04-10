@@ -1,3 +1,6 @@
+# coding: utf-8
+# Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
+
 """Agent Runtime Manager Server
 
 FastAPI 服务器，提供 Agent 部署管理 REST API（支持租户隔离）

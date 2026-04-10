@@ -1,5 +1,7 @@
 # coding: utf-8
-# Copyright (c) Huawei Technologies Co., Ltd. 2025-2025. All rights reserved.
+# Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
+
+# Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved.
 
 """一次性启动：校验环境变量、初始化 LongTermMemory、可选 Redis checkpointer。"""
 

@@ -1,3 +1,6 @@
+# coding: utf-8
+# Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
+
 """数据模型"""
 
 from .enums import DeploymentType, DeploymentStatus

@@ -1,3 +1,6 @@
+# coding: utf-8
+# Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
+
 """租户隔离中间件
 
 从 HTTP Header 或 JWT Token 中提取 user_id 和 space_id，

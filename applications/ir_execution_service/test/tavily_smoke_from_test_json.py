@@ -1,3 +1,6 @@
+# coding: utf-8
+# Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
+
 """
 Smoke test: same Tavily params as applications/ir_execution_service/test/test.json
 (plugin_BCvUb.configs.tool). Uses stdlib only.

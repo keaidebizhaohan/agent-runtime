@@ -1,3 +1,6 @@
+# coding: utf-8
+# Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
+
 """K8s 部署模块数据模型"""
 
 from dataclasses import dataclass, field

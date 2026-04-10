@@ -1,3 +1,6 @@
+# coding: utf-8
+# Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
+
 """K8s 部署模块"""
 
 from .models import K8sParams, K8sInfo, K8sCreate, K8S_TABLE_DEF

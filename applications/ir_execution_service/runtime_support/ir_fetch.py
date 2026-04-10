@@ -1,5 +1,8 @@
+# coding: utf-8
+# Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
+
 # -*- coding: utf-8 -*-
-# Copyright (c) Huawei Technologies Co., Ltd. 2025-2025. All rights reserved.
+# Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved.
 
 """IR 拉取与解析：对象键 → 本地缓存路径（按需从 OBS 下载）、workflow/agent 判定、HTTP 异常映射。
 

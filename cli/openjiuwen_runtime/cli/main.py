@@ -1,3 +1,6 @@
+# coding: utf-8
+# Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
+
 """Agent Runtime Manager CLI v2.0
 
 使用WHL包部署Agent和Plugin，支持虚拟环境隔离。

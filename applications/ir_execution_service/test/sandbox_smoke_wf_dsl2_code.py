@@ -1,3 +1,6 @@
+# coding: utf-8
+# Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
+
 """用 wf_dsl2.json 中 code_br6Gu 的同一段代码探测 CODE_SANDBOX_URL（与 RemoteCodeRunner 请求体一致）。"""
 from __future__ import annotations
 
