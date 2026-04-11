@@ -32,7 +32,7 @@ class VirtualEnvironmentManager:
         Returns:
             虚拟环境根目录路径
         """
-        return settings.deploy_path/deployment_id/".venv"
+        return settings.deploy_path / deployment_id / ".venv"
 
 
     def create_venv(self, deployment_id: str) -> Path:
@@ -155,7 +155,7 @@ class VirtualEnvironmentManager:
 
         logger.info(f"Installing WHL package: {whl_path} into {deployment_id}")
 
-        uv_extra_args_list  = shlex.split(settings.UV_EXTRA_ARGS.strip())
+        uv_extra_args_list = shlex.split(settings.UV_EXTRA_ARGS.strip())
 
         # 使用 uv pip 安装包，通过虚拟环境路径指定目标环境
         cmd = [

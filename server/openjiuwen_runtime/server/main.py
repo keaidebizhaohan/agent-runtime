@@ -6,25 +6,23 @@
 FastAPI 服务器，提供 Agent 部署管理 REST API（支持租户隔离）
 """
 
-import os
 import logging
-import tempfile
 import uuid
-from pathlib import Path
 from contextlib import asynccontextmanager
+from pathlib import Path
 
-from .utils import mask_userdata
-from .middleware.tenant import TenantContextMiddleware, get_tenant_context
-
-from fastapi import FastAPI, HTTPException, UploadFile, Query, status, Request
+from fastapi import FastAPI, HTTPException, Query, Request, UploadFile, status
 from fastapi.responses import JSONResponse
 
+from openjiuwen_runtime.foundation.config import settings
+from openjiuwen_runtime.foundation.db.mysql_handler import MySQLHandler
+from openjiuwen_runtime.foundation.db.sqlite_handler import SQLiteHandler
+from openjiuwen_runtime.foundation.port_utils import allocate_port, is_port_available
 from openjiuwen_runtime.management.manager import DeploymentManager, DeployMode
 from openjiuwen_runtime.management.models.enums import DeploymentType, DeploymentStatus
-from openjiuwen_runtime.foundation.config import settings
-from openjiuwen_runtime.foundation.db.sqlite_handler import SQLiteHandler
-from openjiuwen_runtime.foundation.db.mysql_handler import MySQLHandler
-from openjiuwen_runtime.foundation.port_utils import allocate_port, is_port_available
+
+from .middleware.tenant import TenantContextMiddleware, get_tenant_context
+from .utils import mask_userdata
 
 
 # 配置日志
@@ -50,7 +48,7 @@ manager = DeploymentManager(db_handler)
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(fastapi_app: FastAPI):
     """应用生命周期管理"""
     # 启动时初始化
     await manager.initialize()
@@ -115,6 +113,7 @@ def prepare_subprocess_deployment(
 
     return port, whl_path
 
+
 def get_deploy_type(mode: str) -> str:
     """
     根据全局配置 DEPLOY_TYPE 计算最终使用的部署模式
@@ -130,6 +129,7 @@ def get_deploy_type(mode: str) -> str:
         return "k8s"
     else:
         return mode
+
 
 # ==================== Agent API ====================
 
@@ -153,13 +153,14 @@ async def deploy_agent(
     try:
         # 获取租户上下文
         user_id, space_id = get_tenant_context(request)
-        logger.info(f"Received agent deploy request: user_id={user_id}, space_id={space_id}, name={name}, userdata={mask_userdata(userdata)}")
+        logger.info(f"Received agent deploy request: user_id={user_id}, "
+                    f"space_id={space_id}, name={name}, userdata={mask_userdata(userdata)}")
 
         deployment_id = str(uuid.uuid4())
         logger.info(f"Generated deployment_id: {deployment_id}")
 
         # 保存上传的 JSON 文件到部署目录下
-        deploy_dir = settings.deploy_path/deployment_id
+        deploy_dir = settings.deploy_path / deployment_id
         deploy_dir.mkdir(parents=True, exist_ok=True)
         json_file_path = deploy_dir / "ir.json"
         content = await file.read()
@@ -197,11 +198,11 @@ async def deploy_agent(
         )
 
     except Exception as e:
-        logger.error(f"Agent deployment failed: {e}")
+        logger.exception("Agent deployment failed")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Deployment failed: {str(e)}"
-    )
+            detail=f"Deployment failed: {str(e)}",
+        ) from e
 
 
 @app.get("/api/v1/agents")
@@ -234,11 +235,11 @@ async def list_agents(
 
         return {"deployments": filtered_deployments}
     except Exception as e:
-        logger.error(f"Failed to list agents: {e}")
+        logger.exception("Failed to list agents")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to list deployments: {str(e)}"
-        )
+            detail=f"Failed to list deployments: {str(e)}",
+        ) from e
 
 
 @app.get("/api/v1/agents/{deployment_id}")
@@ -270,11 +271,11 @@ async def get_agent(request: Request, deployment_id: str):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to get agent: {e}")
+        logger.exception("Failed to get agent")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to get deployment: {str(e)}"
-        )
+            detail=f"Failed to get deployment: {str(e)}",
+        ) from e
 
 
 @app.delete("/api/v1/agents/{deployment_id}")
@@ -296,11 +297,11 @@ async def delete_agent(request: Request, deployment_id: str):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to delete agent: {e}")
+        logger.exception("Failed to delete agent")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to delete deployment: {str(e)}"
-        )
+            detail=f"Failed to delete deployment: {str(e)}",
+        ) from e
 
 
 if __name__ == "__main__":

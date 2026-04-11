@@ -29,19 +29,18 @@ userdata JSON 格式:
     }
 """
 
-import json
+import asyncio
 import copy
+import json
 import logging
 import os
 import sys
-import uuid
-import asyncio
-from datetime import datetime
 from typing import AsyncIterator, Tuple
 
 # 设置 DB_TYPE=none，避免数据库配置检查
 # 注意：使用直接赋值而不是 setdefault，确保覆盖从 runtime 服务继承的 DB_TYPE
 os.environ["DB_TYPE"] = "none"
+
 
 def _parse_userdata_env_vars():
     """
@@ -83,20 +82,14 @@ _CODE_SANDBOX_URL = os.getenv("CODE_SANDBOX_URL", "")
 if not _CODE_SANDBOX_URL:
     _CODE_SANDBOX_URL = "http://localhost:8188/run"
 
-from openjiuwen_studio.core.executor.component.code_runner.remote import remote_code_runner
-remote_code_runner.code_sandbox_url = _CODE_SANDBOX_URL
-
-from openjiuwen_runtime.service.app.agent_app import AgentApp
-from openjiuwen.core.runner import Runner
 from openjiuwen.core.application.llm_agent import LLMAgent, ReActAgentConfig as LegacyReActAgentConfig
 from openjiuwen.core.application.workflow_agent import WorkflowAgent
+from openjiuwen.core.runner import Runner
 from openjiuwen.core.single_agent.legacy import WorkflowAgentConfig as LegacyWorkflowAgentConfig
-from openjiuwen_studio.lowcode import AgentCompiler
-from openjiuwen_studio.lowcode.config_adapter import ConfigAdapter
-from openjiuwen_studio.lowcode.runtime_workflow_runner import RuntimeWorkflowRunner
+
 from openjiuwen_runtime.examples.lowcode_agent.agui_converter import (
-    agui_assistant_text_as_answer_events,
     agui_append_text_and_finish_events,
+    agui_assistant_text_as_answer_events,
     agui_error_events,
     agui_trace_context,
     convert_chunk_to_agui_events,
@@ -107,6 +100,15 @@ from openjiuwen_runtime.examples.lowcode_agent.agui_converter import (
 from openjiuwen_runtime.examples.lowcode_agent.workflow_registration import (
     normalize_workflow_providers_for_agent,
 )
+from openjiuwen_runtime.service.app.agent_app import AgentApp
+
+from openjiuwen_studio.core.executor.component.code_runner.remote import remote_code_runner
+
+remote_code_runner.code_sandbox_url = _CODE_SANDBOX_URL
+
+from openjiuwen_studio.lowcode import AgentCompiler
+from openjiuwen_studio.lowcode.config_adapter import ConfigAdapter
+from openjiuwen_studio.lowcode.runtime_workflow_runner import RuntimeWorkflowRunner
 
 _STRICT_LOGGER_HANDLER_NAMES = (
     "common",
@@ -168,6 +170,7 @@ def _get_venv_path() -> str:
         return venv_env
     # 回退到可执行文件的父目录
     return os.path.dirname(os.path.dirname(sys.executable))
+
 
 def _setup_logging():
     """配置日志系统"""

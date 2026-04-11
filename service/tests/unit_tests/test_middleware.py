@@ -124,8 +124,8 @@ class TestMiddlewareRegistration(unittest.TestCase):
 
         result = app.add_middleware(middleware)
 
-        self.assertEqual(len(app._middlewares), 1)
-        self.assertIs(app._middlewares[0], middleware)
+        self.assertEqual(len(app.middlewares), 1)
+        self.assertIs(app.middlewares[0], middleware)
         self.assertIs(result, app)
 
     def test_middleware_decorator(self):
@@ -138,9 +138,9 @@ class TestMiddlewareRegistration(unittest.TestCase):
 
         instance = app.middleware(CustomMiddleware)
 
-        self.assertEqual(len(app._middlewares), 1)
-        self.assertIsInstance(app._middlewares[0], CustomMiddleware)
-        self.assertIs(app._middlewares[0], instance)
+        self.assertEqual(len(app.middlewares), 1)
+        self.assertIsInstance(app.middlewares[0], CustomMiddleware)
+        self.assertIs(app.middlewares[0], instance)
 
     def test_chained_calls(self):
         """测试链式调用添加多个中间件"""
@@ -150,9 +150,9 @@ class TestMiddlewareRegistration(unittest.TestCase):
 
         result = app.add_middleware(mw1).add_middleware(mw2)
 
-        self.assertEqual(len(app._middlewares), 2)
-        self.assertIs(app._middlewares[0], mw1)
-        self.assertIs(app._middlewares[1], mw2)
+        self.assertEqual(len(app.middlewares), 2)
+        self.assertIs(app.middlewares[0], mw1)
+        self.assertIs(app.middlewares[1], mw2)
         self.assertIs(result, app)
 
 
@@ -174,13 +174,13 @@ class TestMiddlewareExecution(unittest.TestCase):
             context = MiddlewareContext()
             messages = [{"role": "user", "content": "test"}]
 
-            for mw in app._middlewares:
+            for mw in app.middlewares:
                 messages = await mw.before_query(messages, None, context)
 
-            for mw in app._middlewares:
+            for mw in app.middlewares:
                 await mw.after_query(messages, None, context)
 
-            for mw in app._middlewares:
+            for mw in app.middlewares:
                 await mw.before_response(messages, None, "response", context)
 
         asyncio.run(run_test())
@@ -279,7 +279,7 @@ class TestContextDataSharing(unittest.TestCase):
             context = MiddlewareContext()
             messages = [{"role": "user", "content": "test"}]
 
-            for mw in app._middlewares:
+            for mw in app.middlewares:
                 messages = await mw.before_query(messages, None, context)
 
             retrieved_values["mw2"] = mw2.retrieved_value

@@ -16,6 +16,7 @@ from openjiuwen_runtime.foundation.log.utils import mask_userdata
 import logging
 logger = logging.getLogger(__name__)
 
+
 class DockerStrategy(BaseDeploymentStrategy[DockerInfo]):
     """Docker 部署策略"""
 

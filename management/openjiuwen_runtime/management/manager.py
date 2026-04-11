@@ -1,24 +1,16 @@
 # coding: utf-8
 # Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
 
+import asyncio
 import logging
 import uuid
-import asyncio
 from datetime import datetime
 from enum import Enum
-from typing import Optional, Any
+from typing import Any, Optional
 from urllib import request as urllib_request
-from urllib import error as urllib_error
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import urljoin, urlparse, urlunparse
 
 from openjiuwen_runtime.foundation.db.handler import DBHandler
-from .models.enums import DeploymentType, DeploymentStatus
-from .models.schemas import (
-    DeploymentInfo,
-    DeploymentCreate,
-    DEPLOYMENT_TABLE_NAME,
-    DeploymentFields,
-)
 from openjiuwen_runtime.foundation.db.table_def import TableDefinition, ColumnDefinition, IndexDefinition
 from .deployments import (
     BaseDeploymentStrategy,
@@ -28,6 +20,13 @@ from .deployments import (
     SubprocessStrategy,
     DockerStrategy,
     K8sStrategy,
+)
+from .models.enums import DeploymentType, DeploymentStatus
+from .models.schemas import (
+    DeploymentInfo,
+    DeploymentCreate,
+    DEPLOYMENT_TABLE_NAME,
+    DeploymentFields,
 )
 
 logger = logging.getLogger(__name__)
@@ -76,7 +75,8 @@ class DeploymentManager:
         self._strategies = strategies or self._create_default_strategies()
         logger.debug("DeploymentManager initialized")
 
-    def _create_default_strategies(self) -> dict[DeployMode, BaseDeploymentStrategy]:
+    @staticmethod
+    def _create_default_strategies() -> dict[DeployMode, BaseDeploymentStrategy]:
         """创建默认策略"""
         return {
             DeployMode.SUBPROCESS: SubprocessStrategy(),
@@ -84,39 +84,10 @@ class DeploymentManager:
             DeployMode.K8S: K8sStrategy(),
         }
 
-    async def initialize(self) -> None:
-        """初始化管理器"""
-        logger.info("Initializing DeploymentManager")
-        await self.db_handler.connect()
-        await self.db_handler.init_table(DEPLOYMENT_TABLE_DEF)
-        for strategy in self._strategies.values():
-            await self.db_handler.init_table(strategy.get_table_definition())
-        logger.info("DeploymentManager initialized successfully")
-
-    async def shutdown(self) -> None:
-        """关闭管理器"""
-        logger.info("Shutting down DeploymentManager")
-        await self.db_handler.disconnect()
-        logger.info("DeploymentManager shutdown complete")
-
-    def _generate_deployment_id(self) -> str:
+    @staticmethod
+    def _generate_deployment_id() -> str:
         """生成部署ID"""
         return str(uuid.uuid4())
-
-    def _get_strategy(self, mode: DeployMode) -> BaseDeploymentStrategy:
-        """获取部署策略"""
-        return self._strategies[mode]
-
-    async def _detect_deploy_mode(self, deployment_id: str) -> Optional[DeployMode]:
-        """检测部署模式"""
-        logger.debug(f"Detecting deploy mode for deployment_id={deployment_id}")
-        for mode, strategy in self._strategies.items():
-            record = await strategy.get_record(self.db_handler, deployment_id)
-            if record:
-                logger.debug(f"Detected deploy mode: {mode} for deployment_id={deployment_id}")
-                return mode
-        logger.debug(f"No deploy mode found for deployment_id={deployment_id}")
-        return None
 
     @staticmethod
     def _health_url_with_loopback_host(base_url: str) -> Optional[str]:
@@ -135,66 +106,24 @@ class DeploymentManager:
         replaced = urlunparse(
             (parsed.scheme, netloc, parsed.path.rstrip("/") or "", "", "", "")
         ).rstrip("/")
-        return replaced + "/health"
+        # URL 路径按 POSIX 语义拼接，使用 urljoin 避免手写分隔符
+        return urljoin(replaced.rstrip("/") + "/", "health")
 
-    async def _check_health_endpoint(self, base_url: str, timeout_seconds: float = 2.0) -> bool:
-        """检查部署服务 /health 是否可访问；主 URL 失败时再尝试 127.0.0.1 同端口兜底。"""
-        url = base_url.rstrip("/") + "/health"
+    async def initialize(self) -> None:
+        """初始化管理器"""
+        logger.info("Initializing DeploymentManager")
+        await self.db_handler.connect()
+        await self.db_handler.init_table(DEPLOYMENT_TABLE_DEF)
+        for strategy in self._strategies.values():
+            await self.db_handler.init_table(strategy.get_table_definition())
+        logger.info("DeploymentManager initialized successfully")
 
-        def _probe(target: str) -> bool:
-            req = urllib_request.Request(target, method="GET")
-            with urllib_request.urlopen(req, timeout=timeout_seconds) as resp:
-                return 200 <= resp.status < 300
-
-        async def _try_once(target: str) -> bool:
-            try:
-                return await asyncio.to_thread(_probe, target)
-            except (urllib_error.URLError, TimeoutError, OSError):
-                return False
-
-        if await _try_once(url):
-            return True
-        fallback = self._health_url_with_loopback_host(base_url)
-        if fallback and fallback != url:
-            return await _try_once(fallback)
-        return False
-
-    async def _wait_until_deployment_ready(
-        self,
-        deployment_id: str,
-        timeout_seconds: int = 600,
-        interval_seconds: float = 20.0,
-    ) -> None:
-        """
-        等待部署就绪：
-        1) 状态为 running
-        2) 若存在 URL，则 /health 探活成功
-        """
-        deadline = asyncio.get_running_loop().time() + timeout_seconds
-        last_status = None
-
-        while asyncio.get_running_loop().time() < deadline:
-            deployment = await self.get_deployment(deployment_id)
-            if deployment is None:
-                raise RuntimeError(f"Deployment {deployment_id} not found while waiting for readiness")
-
-            last_status = deployment.deployment_status.value
-            if deployment.deployment_status == DeploymentStatus.RUNNING:
-                if deployment.url:
-                    if await self._check_health_endpoint(deployment.url):
-                        return
-                else:
-                    return
-
-            if deployment.deployment_status == DeploymentStatus.FAILED:
-                raise RuntimeError(f"Deployment {deployment_id} entered failed status")
-
-            await asyncio.sleep(interval_seconds)
-
-        raise RuntimeError(
-            f"Deployment {deployment_id} not ready within {timeout_seconds}s (last_status={last_status})"
-        )
-
+    async def shutdown(self) -> None:
+        """关闭管理器"""
+        logger.info("Shutting down DeploymentManager")
+        await self.db_handler.disconnect()
+        logger.info("DeploymentManager shutdown complete")
+    
     async def deploy_agent(
             self,
             name: str,
@@ -205,7 +134,8 @@ class DeploymentManager:
             **kwargs: Any,
     ) -> DeploymentInfo:
         """部署Agent"""
-        logger.info(f"Deploying agent: name={name}, version={version}, mode={mode}, user_id={user_id}, space_id={space_id}")
+        logger.info(f"Deploying agent: name={name}, version={version}, "
+                    f"mode={mode}, user_id={user_id}, space_id={space_id}")
         kwargs["package_name"] = name
         return await self._deploy(
             deployment_type=DeploymentType.AGENT,
@@ -228,7 +158,8 @@ class DeploymentManager:
             **kwargs: Any,
     ) -> DeploymentInfo:
         """部署Plugin"""
-        logger.info(f"Deploying plugin: name={name}, version={version}, mode={mode}, user_id={user_id}, space_id={space_id}")
+        logger.info(f"Deploying plugin: name={name}, version={version}, "
+                    f"mode={mode}, user_id={user_id}, space_id={space_id}")
         return await self._deploy(
             deployment_type=DeploymentType.PLUGIN,
             name=name,
@@ -239,63 +170,6 @@ class DeploymentManager:
             space_id=space_id,
             **kwargs,
         )
-
-    async def _deploy(
-            self,
-            deployment_type: DeploymentType,
-            name: str,
-            version: str,
-            mode: DeployMode,
-            user_id: Optional[str] = None,
-            space_id: Optional[str] = None,
-            **kwargs: Any,
-    ) -> DeploymentInfo:
-        """内部部署方法"""
-        deployment_id = kwargs.pop("deployment_id", None) or self._generate_deployment_id()
-        now = datetime.utcnow()
-
-        logger.debug(f"deployment_id={deployment_id}, type={deployment_type}, name={name}")
-
-        create_model = DeploymentCreate(
-            deployment_id=deployment_id,
-            version=version,
-            deployment_type=deployment_type,
-            name=name,
-            url=kwargs.get("url"),
-            user_id=user_id,
-            space_id=space_id,
-            data=kwargs.get("data"),
-        )
-        deployment_data = create_model.model_dump()
-        deployment_data[DeploymentFields.DEPLOYMENT_STATUS] = DeploymentStatus.PENDING.value
-        deployment_data[DeploymentFields.CREATED_AT] = now
-        deployment_data[DeploymentFields.UPDATED_AT] = now
-        
-        await self.db_handler.create(DEPLOYMENT_TABLE_NAME, deployment_data)
-
-        strategy = self._get_strategy(mode)
-
-        try:
-            await strategy.create_record(
-                self.db_handler, deployment_id, version, **kwargs
-            )
-            await strategy.deploy(deployment_id, self.db_handler)
-
-            await self._wait_until_deployment_ready(deployment_id)
-            logger.info(f"Deployment completed: deployment_id={deployment_id}, name={name}")
-        except Exception as e:
-            logger.error(f"Deployment failed: deployment_id={deployment_id}, error={str(e)}")
-            await self.db_handler.update(
-                DEPLOYMENT_TABLE_NAME,
-                {DeploymentFields.DEPLOYMENT_ID: deployment_id},
-                {DeploymentFields.DEPLOYMENT_STATUS: DeploymentStatus.FAILED.value},
-            )
-
-        deployment_record = await self.db_handler.get(
-            DEPLOYMENT_TABLE_NAME, 
-            {DeploymentFields.DEPLOYMENT_ID: deployment_id}
-        )
-        return DeploymentInfo.model_validate(deployment_record)
 
     async def list_deployments(
             self,
@@ -308,7 +182,8 @@ class DeploymentManager:
     ) -> list[DeploymentInfo]:
         """列出部署"""
         logger.debug(
-            f"Listing deployments: type={deployment_type}, status={deployment_status}, user_id={user_id}, space_id={space_id}, limit={limit}, offset={offset}")
+            f"Listing deployments: type={deployment_type}, status={deployment_status}, "
+            f"user_id={user_id}, space_id={space_id}, limit={limit}, offset={offset}")
         filters = {}
         if deployment_type:
             filters[DeploymentFields.DEPLOYMENT_TYPE] = deployment_type.value
@@ -349,7 +224,8 @@ class DeploymentManager:
         )
         if not record:
             return None
-        status = record.get(DeploymentFields.DEPLOYMENT_STATUS) if isinstance(record, dict) else record.deployment_status
+        status = record.get(DeploymentFields.DEPLOYMENT_STATUS) \
+            if isinstance(record, dict) else record.deployment_status
         return DeploymentStatus(status)
 
     async def stop_deployment(
@@ -412,3 +288,133 @@ class DeploymentManager:
         logger.debug(f"Getting k8s info: deployment_id={deployment_id}")
         strategy = self._get_strategy(DeployMode.K8S)
         return await strategy.get_info(self.db_handler, deployment_id)
+
+    def _get_strategy(self, mode: DeployMode) -> BaseDeploymentStrategy:
+        """获取部署策略"""
+        return self._strategies[mode]
+
+    async def _detect_deploy_mode(self, deployment_id: str) -> Optional[DeployMode]:
+        """检测部署模式"""
+        logger.debug(f"Detecting deploy mode for deployment_id={deployment_id}")
+        for mode, strategy in self._strategies.items():
+            record = await strategy.get_record(self.db_handler, deployment_id)
+            if record:
+                logger.debug(f"Detected deploy mode: {mode} for deployment_id={deployment_id}")
+                return mode
+        logger.debug(f"No deploy mode found for deployment_id={deployment_id}")
+        return None
+
+    async def _check_health_endpoint(self, base_url: str, timeout_seconds: float = 2.0) -> bool:
+        """检查部署服务 /health 是否可访问；主 URL 失败时再尝试 127.0.0.1 同端口兜底。"""
+        url = urljoin(base_url.rstrip("/") + "/", "health")
+
+        def _probe(target: str) -> bool:
+            req = urllib_request.Request(target, method="GET")
+            with urllib_request.urlopen(req, timeout=timeout_seconds) as resp:
+                return 200 <= resp.status < 300
+
+        async def _try_once(target: str) -> bool:
+            try:
+                return await asyncio.to_thread(_probe, target)
+            except OSError:
+                return False
+
+        if await _try_once(url):
+            return True
+        fallback = self._health_url_with_loopback_host(base_url)
+        if fallback and fallback != url:
+            return await _try_once(fallback)
+        return False
+
+    async def _wait_until_deployment_ready(
+        self,
+        deployment_id: str,
+        timeout_seconds: int = 600,
+        interval_seconds: float = 20.0,
+    ) -> None:
+        """
+        等待部署就绪：
+        1) 状态为 running
+        2) 若存在 URL，则 /health 探活成功
+        """
+        deadline = asyncio.get_running_loop().time() + timeout_seconds
+        last_status = None
+
+        while asyncio.get_running_loop().time() < deadline:
+            deployment = await self.get_deployment(deployment_id)
+            if deployment is None:
+                raise RuntimeError(f"Deployment {deployment_id} not found while waiting for readiness")
+
+            last_status = deployment.deployment_status.value
+            if deployment.deployment_status == DeploymentStatus.RUNNING:
+                if deployment.url:
+                    if await self._check_health_endpoint(deployment.url):
+                        return
+                else:
+                    return
+
+            if deployment.deployment_status == DeploymentStatus.FAILED:
+                raise RuntimeError(f"Deployment {deployment_id} entered failed status")
+
+            await asyncio.sleep(interval_seconds)
+
+        raise RuntimeError(
+            f"Deployment {deployment_id} not ready within {timeout_seconds}s (last_status={last_status})"
+        )
+
+    async def _deploy(
+            self,
+            deployment_type: DeploymentType,
+            name: str,
+            version: str,
+            mode: DeployMode,
+            user_id: Optional[str] = None,
+            space_id: Optional[str] = None,
+            **kwargs: Any,
+    ) -> DeploymentInfo:
+        """内部部署方法"""
+        deployment_id = kwargs.pop("deployment_id", None) or self._generate_deployment_id()
+        now = datetime.utcnow()
+
+        logger.debug(f"deployment_id={deployment_id}, type={deployment_type}, name={name}")
+
+        create_model = DeploymentCreate(
+            deployment_id=deployment_id,
+            version=version,
+            deployment_type=deployment_type,
+            name=name,
+            url=kwargs.get("url"),
+            user_id=user_id,
+            space_id=space_id,
+            data=kwargs.get("data"),
+        )
+        deployment_data = create_model.model_dump()
+        deployment_data[DeploymentFields.DEPLOYMENT_STATUS] = DeploymentStatus.PENDING.value
+        deployment_data[DeploymentFields.CREATED_AT] = now
+        deployment_data[DeploymentFields.UPDATED_AT] = now
+        
+        await self.db_handler.create(DEPLOYMENT_TABLE_NAME, deployment_data)
+
+        strategy = self._get_strategy(mode)
+
+        try:
+            await strategy.create_record(
+                self.db_handler, deployment_id, version, **kwargs
+            )
+            await strategy.deploy(deployment_id, self.db_handler)
+
+            await self._wait_until_deployment_ready(deployment_id)
+            logger.info(f"Deployment completed: deployment_id={deployment_id}, name={name}")
+        except Exception as e:
+            logger.error(f"Deployment failed: deployment_id={deployment_id}, error={str(e)}")
+            await self.db_handler.update(
+                DEPLOYMENT_TABLE_NAME,
+                {DeploymentFields.DEPLOYMENT_ID: deployment_id},
+                {DeploymentFields.DEPLOYMENT_STATUS: DeploymentStatus.FAILED.value},
+            )
+
+        deployment_record = await self.db_handler.get(
+            DEPLOYMENT_TABLE_NAME, 
+            {DeploymentFields.DEPLOYMENT_ID: deployment_id}
+        )
+        return DeploymentInfo.model_validate(deployment_record)

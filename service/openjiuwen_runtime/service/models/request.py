@@ -5,8 +5,8 @@
 openjiuwen-runtime-sdk 的请求和响应模型
 """
 
-from pydantic import BaseModel, Field
 from typing import List, Dict, Any, Optional
+from pydantic import BaseModel, Field
 
 
 class QueryRequest(BaseModel):

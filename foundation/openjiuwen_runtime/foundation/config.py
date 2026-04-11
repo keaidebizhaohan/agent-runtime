@@ -71,7 +71,6 @@ class Settings(BaseSettings):
                 raise ValueError(f"When DB_TYPE=mysql, the following fields are required: {', '.join(missing)}")
         return self
 
-
     # ========================
     # 路径校验：相对目录 → 项目根目录绝对路径 + 自动创建
     # ========================

@@ -229,7 +229,7 @@ class DockerDeployer(Deployer[DockerParams]):
                 del self._containers[deployment_id]
 
             # 清理部署目录
-            deploy_context_dir = settings.deploy_path/deployment_id
+            deploy_context_dir = settings.deploy_path / deployment_id
             logger.debug(f"Cleaning deploy directory: {deploy_context_dir}")
             shutil.rmtree(deploy_context_dir, ignore_errors=True)
 

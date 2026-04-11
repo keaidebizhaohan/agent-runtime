@@ -141,6 +141,11 @@ class AgentApp(BaseApp):
         self._middlewares.append(instance)
         return instance
 
+    @property
+    def middlewares(self) -> tuple[Middleware, ...]:
+        """已注册中间件的只读快照（顺序与执行顺序一致）。"""
+        return tuple(self._middlewares)
+
     def _register_agent_routes(self):
         """注册 Agent 特定路由"""
 
@@ -196,7 +201,8 @@ class AgentApp(BaseApp):
                                         pass
 
                                 if chunk_count <= 3:
-                                    logger.info(f"[generate] yielding chunk #{chunk_count}, type={type(processed_msg).__name__}")
+                                    logger.info(f"[generate] yielding chunk #{chunk_count}, "
+                                                f"type={type(processed_msg).__name__}")
                                 yield f"data: {json.dumps(processed_msg)}\n\n"
                         finally:
                             cancel_event.set()
@@ -290,8 +296,8 @@ class AgentApp(BaseApp):
             except HTTPException:
                 raise
             except Exception as e:
-                logger.error(f"Agent detail execution failed: {e}", exc_info=True)
-                raise HTTPException(status_code=500, detail=str(e))
+                logger.exception("Agent detail execution failed")
+                raise HTTPException(status_code=500, detail=str(e)) from e
 
         # 更新健康检查，包含 agent_loaded 状态
         # 获取原始 /health 路由
