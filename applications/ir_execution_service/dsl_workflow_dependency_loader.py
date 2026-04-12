@@ -30,6 +30,7 @@ WorkflowKey = Tuple[str, str]
 class WorkflowLlmApiKeyMissingError(Exception):
     """DSL LLM/意图/提问器节点：可解析的 LLM_KEY__* 与 JSON 内 api_key 均未配置。"""
 
+
 def strip_dependencies(wf: Dict[str, Any]) -> Dict[str, Any]:
     return {k: v for k, v in wf.items() if k != "dependencies"}
 
@@ -185,12 +186,12 @@ class DependencyWorkflowLoader(IWorkflowLoader):
     async def get_compiled_workflow(
         self,
         context: Context,
-        id: str,
+        workflow_id: str,
         version: str,
         space_id: str,
         current_user: Dict[str, Any],
     ) -> InvokableWorkflow:
-        wf_dict, cache_key = self._resolve(id, version)
+        wf_dict, cache_key = self._resolve(workflow_id, version)
         if cache_key in self._cache:
             return self._cache[cache_key]
         if cache_key in self._compiling:

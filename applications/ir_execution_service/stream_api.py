@@ -211,14 +211,22 @@ async def _workflow_stream_event_source(chunk_stream: AsyncIterator[Any], timeou
                     data={"type": data_type, "payload": payload},
                 ).model_dump_json()
     except asyncio.TimeoutError:
-        logging.getLogger(__name__).error("workflow stream execution timeout after %.3fs", timeout_seconds, exc_info=True)
+        logging.getLogger(__name__).error(
+            "workflow stream execution timeout after %.3fs",
+            timeout_seconds,
+            exc_info=True,
+        )
         c = LowcodeApiResponseCode.EXECUTION_TIMEOUT
         yield _stream_error_event(c, message=c.format_message())
     except BaseError as e:
         logging.getLogger(__name__).exception("workflow stream execution failed: %s", e)
         detail_code = int(getattr(e, "code", LowcodeApiResponseCode.INTERNAL_ERROR))
         msg = str(getattr(e, "message", "") or e)
-        yield _stream_error_event(LowcodeApiResponseCode.EXECUTION_FAILED, message=msg, payload={"detail_code": detail_code})
+        yield _stream_error_event(
+            LowcodeApiResponseCode.EXECUTION_FAILED,
+            message=msg,
+            payload={"detail_code": detail_code},
+        )
     except asyncio.CancelledError:
         c = LowcodeApiResponseCode.EXECUTION_CANCELLED
         yield _stream_error_event(c)
@@ -249,14 +257,22 @@ async def _agent_stream_event_source(chunk_stream: AsyncIterator[Any], timeout_s
                     data={"type": data_type, "payload": payload},
                 ).model_dump_json()
     except asyncio.TimeoutError:
-        logging.getLogger(__name__).error("agent stream execution timeout after %.3fs", timeout_seconds, exc_info=True)
+        logging.getLogger(__name__).error(
+            "agent stream execution timeout after %.3fs",
+            timeout_seconds,
+            exc_info=True,
+        )
         c = LowcodeApiResponseCode.EXECUTION_TIMEOUT
         yield _stream_error_event(c, message=c.format_message())
     except BaseError as e:
         logging.getLogger(__name__).exception("agent stream execution failed: %s", e)
         detail_code = int(getattr(e, "code", LowcodeApiResponseCode.INTERNAL_ERROR))
         msg = str(getattr(e, "message", "") or e)
-        yield _stream_error_event(LowcodeApiResponseCode.EXECUTION_FAILED, message=msg, payload={"detail_code": detail_code})
+        yield _stream_error_event(
+            LowcodeApiResponseCode.EXECUTION_FAILED,
+            message=msg,
+            payload={"detail_code": detail_code},
+        )
     except asyncio.CancelledError:
         c = LowcodeApiResponseCode.EXECUTION_CANCELLED
         yield _stream_error_event(c)

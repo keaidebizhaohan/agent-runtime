@@ -255,7 +255,7 @@ class MemoryEngineManager:
             return b""
         try:
             return base64.b64decode(encoded_key)
-        except (ValueError, binascii.Error):
+        except binascii.Error:
             logger.warning("Invalid SERVER_AES master key value; memory encryption disabled.")
             return b""
 

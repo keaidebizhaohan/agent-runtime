@@ -89,6 +89,7 @@ from runtime_support.runtime_env import get_bool_env, resolve_llm_api_key_from_e
 # 常量与路径
 # ---------------------------------------------------------------------------
 
+
 def inject_api_keys_into_model_references(model_references: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     out: Dict[str, Any] = {}
     for key, ref in (model_references or {}).items():
@@ -414,7 +415,11 @@ def _intent_convert_export(node: Any, space_id: str, model_references: Dict[str,
     )
 
 
-def _plugin_convert_export(node: Any, space_id: str, plugin_tool_configs: Dict[str, Dict[str, Any]]) -> studio_dsl.Component:
+def _plugin_convert_export(
+    node: Any,
+    space_id: str,
+    plugin_tool_configs: Dict[str, Dict[str, Any]],
+) -> studio_dsl.Component:
     data = node.data
     inputs = data.inputs
     if inputs is None:

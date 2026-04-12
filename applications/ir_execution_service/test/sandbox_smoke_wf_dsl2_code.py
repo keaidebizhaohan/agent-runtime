@@ -4,11 +4,14 @@
 """用 wf_dsl2.json 中 code_br6Gu 的同一段代码探测 CODE_SANDBOX_URL（与 RemoteCodeRunner 请求体一致）。"""
 from __future__ import annotations
 
+import logging
 import os
 import textwrap
 from pathlib import Path
 
 import requests
+
+_LOG = logging.getLogger(__name__)
 
 DEFAULT_PY_CODE = """
 class Args:
@@ -47,23 +50,24 @@ def main() -> None:
         "inputs": {"input": "sandbox_smoke_test"},
         "timeout": 30,
     }
-    print("POST", url)
+    _LOG.info("POST %s", url)
     r = requests.post(
         url,
         json=payload,
         headers={"Content-Type": "application/json"},
         timeout=45,
     )
-    print("HTTP", r.status_code)
-    print("raw body:", r.text[:3000])
+    _LOG.info("HTTP %s", r.status_code)
+    _LOG.info("raw body: %s", r.text[:3000])
     r.raise_for_status()
     data = r.json()
     out = data.get("output")
-    print("output:", out)
+    _LOG.info("output: %s", out)
     if isinstance(out, dict):
-        print("output.error:", out.get("error"))
-        print("output.return:", out.get("return"))
+        _LOG.info("output.error: %s", out.get("error"))
+        _LOG.info("output.return: %s", out.get("return"))
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     main()

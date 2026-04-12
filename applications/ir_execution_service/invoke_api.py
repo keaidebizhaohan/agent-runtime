@@ -35,6 +35,7 @@ def _json_response(model: ResponseModel) -> JSONResponse:
     # HTTP 始终返回 200，由 body.code 表达业务状态。
     return JSONResponse(model.model_dump(), media_type=JSON_MEDIA_TYPE)
 
+
 def _invoke_exception_to_model(exc: Exception) -> ResponseModel:
     """将 invoke 路径异常转换为 error 响应。"""
     from openjiuwen.core.common.exception.errors import BaseError
@@ -88,7 +89,11 @@ def _agent_invoke_result_to_model(result: Any) -> ResponseModel:
                 "workflow_execution_state": to_jsonable(result.get("workflow_execution_state")),
                 "component_ids": to_jsonable(result.get("component_ids", [])),
             }
-            return ResponseModel(code=int(ok), message=ok.default_message, data={"type": "interaction", "payload": payload})
+            return ResponseModel(
+                code=int(ok),
+                message=ok.default_message,
+                data={"type": "interaction", "payload": payload},
+            )
 
         if result_type:
             return ResponseModel(
@@ -106,7 +111,11 @@ def _agent_invoke_result_to_model(result: Any) -> ResponseModel:
             data={"type": ResponseDataType.UNKNOWN.value, "payload": to_jsonable(result)},
         )
 
-    return ResponseModel(code=int(ok), message=ok.default_message, data={"type": "result", "payload": to_jsonable(result)})
+    return ResponseModel(
+        code=int(ok),
+        message=ok.default_message,
+        data={"type": "result", "payload": to_jsonable(result)},
+    )
 
 
 def _workflow_invoke_result_to_model(result: Any) -> ResponseModel:
@@ -156,13 +165,18 @@ def _workflow_invoke_result_to_model(result: Any) -> ResponseModel:
                 )
 
         c = LowcodeApiResponseCode.INVOKE_NOT_SUPPORTED
+        err_payload = {"error_code": int(c), "error_message": c.default_message}
         return ResponseModel(
             code=int(c),
             message=c.default_message,
-            data={"type": "error", "payload": {"error_code": int(c), "error_message": c.default_message}},
+            data={"type": "error", "payload": err_payload},
         )
 
-    return ResponseModel(code=int(ok), message=ok.default_message, data={"type": "result", "payload": {"data": to_jsonable(result)}})
+    return ResponseModel(
+        code=int(ok),
+        message=ok.default_message,
+        data={"type": "result", "payload": {"data": to_jsonable(result)}},
+    )
 
 
 async def handle_execute_invoke(body: Any) -> JSONResponse:
@@ -198,8 +212,6 @@ async def handle_execute_invoke(body: Any) -> JSONResponse:
                 Runner.run_workflow(workflow=workflow, inputs=prepared.inputs_obj, session=prepared.session_id),
                 timeout=prepared.timeout_seconds,
             )
-        except asyncio.CancelledError:
-            raise
         except Exception as e:
             logging.getLogger(__name__).exception("workflow invoke failed: %s", e)
             return _json_response(_invoke_exception_to_model(e))
@@ -216,8 +228,6 @@ async def handle_execute_invoke(body: Any) -> JSONResponse:
             Runner.run_agent(agent=react_agent, inputs=prepared.inputs_obj, session=prepared.session_id),
             timeout=prepared.timeout_seconds,
         )
-    except asyncio.CancelledError:
-        raise
     except Exception as e:
         logging.getLogger(__name__).exception("agent invoke failed: %s", e)
         return _json_response(_invoke_exception_to_model(e))

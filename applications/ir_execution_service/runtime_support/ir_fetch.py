@@ -105,7 +105,8 @@ def lowcode_code_from_http_exception(exc: HTTPException) -> tuple[LowcodeApiResp
             return LowcodeApiResponseCode.INVALID_IR_PATH, detail
         return LowcodeApiResponseCode.INVALID_PARAM, detail
     if exc.status_code == 500:
-        if "obs" in lowered or "bucket" in lowered or "lowcode_ir" in lowered or "configured" in lowered:
+        obs_hints = ("obs", "bucket", "lowcode_ir", "configured")
+        if any(h in lowered for h in obs_hints):
             return LowcodeApiResponseCode.DEPENDENCY_ERROR, detail
         return LowcodeApiResponseCode.INTERNAL_ERROR, detail
     return LowcodeApiResponseCode.INTERNAL_ERROR, detail

@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import sys
 import tempfile
@@ -24,9 +25,11 @@ from pathlib import Path
 
 from fastapi import HTTPException
 
+_LOG = logging.getLogger(__name__)
+
 _SERVICE_ROOT = Path(__file__).resolve().parent.parent
 if str(_SERVICE_ROOT) not in sys.path:
-    sys.path.insert(0, str(_SERVICE_ROOT))
+    sys.path.append(str(_SERVICE_ROOT))
 
 from runtime_support.ir_fetch import ensure_ir_local_path
 
@@ -59,7 +62,7 @@ async def _test_cache_hit() -> None:
         got2 = await ensure_ir_local_path("/my_space/wf_demo.json")
         assert got2.resolve() == cached.resolve()
 
-        print("[ok] cache hit:", got)
+        _LOG.info("[ok] cache hit: %s", got)
 
 
 async def _test_validation_errors() -> None:
@@ -78,7 +81,7 @@ async def _test_validation_errors() -> None:
                 assert e.status_code == 400, (label, e.status_code)
                 detail = str(e.detail).lower()
                 assert expect_substr in detail, (label, e.detail)
-                print(f"[ok] validation {label}: {e.detail}")
+                _LOG.info("[ok] validation %s: %s", label, e.detail)
             else:
                 raise AssertionError(f"{label}: expected HTTPException")
 
@@ -87,17 +90,18 @@ async def _run_download_smoke(ir_path: str) -> None:
     """可选：缓存不存在时走 OBS（需完整 .env 与网络）。"""
     _load_dotenv_optional()
     p = await ensure_ir_local_path(ir_path)
-    print("[ok] download or cache:", p, "exists=", p.is_file())
+    _LOG.info("[ok] download or cache: %s exists=%s", p, p.is_file())
 
 
 async def _main() -> None:
     await _test_cache_hit()
     await _test_validation_errors()
-    print("ensure_ir_local_path 本地分支测试全部通过。")
+    _LOG.info("ensure_ir_local_path 本地分支测试全部通过。")
 
     # 取消注释并填入真实 OBS 对象键可测下载链路：
     # await _run_download_smoke("your/prefix/workflow.json")
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     asyncio.run(_main())

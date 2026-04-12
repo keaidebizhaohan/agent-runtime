@@ -32,8 +32,11 @@ def setup_error_file_logging() -> Path:
 
     def _already_added(logger_obj: logging.Logger) -> bool:
         for h in logger_obj.handlers:
-            if isinstance(h, logging.FileHandler) and getattr(h, "baseFilename", None) == getattr(handler, "baseFilename", None):
-                return True
+            if isinstance(h, logging.FileHandler):
+                h_base = getattr(h, "baseFilename", None)
+                hand_base = getattr(handler, "baseFilename", None)
+                if h_base == hand_base:
+                    return True
         return False
 
     # 尽量覆盖：根 logger、uvicorn、以及 openjiuwen 的 logger 层级

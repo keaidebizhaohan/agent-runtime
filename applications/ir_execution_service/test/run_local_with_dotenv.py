@@ -13,9 +13,12 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import sys
 from pathlib import Path
+
+_LOG = logging.getLogger(__name__)
 
 # 本文件在 .../ir_execution_service/test/；应用与 ir_execution_service_app 在上一级
 _SERVICE_ROOT = Path(__file__).resolve().parent.parent
@@ -26,18 +29,17 @@ def _ensure_env() -> None:
     try:
         from dotenv import load_dotenv
     except ImportError as e:
-        print("缺少 python-dotenv，请在本目录执行: uv sync", file=sys.stderr)
-        raise SystemExit(1) from e
+        raise ImportError("缺少 python-dotenv，请在本目录执行: uv sync") from e
 
     for env_path in (_SERVICE_ROOT / ".env", _TEST_IR_ROOT / ".env"):
         if env_path.is_file():
             load_dotenv(env_path)
             break
     else:
-        print(
-            f"警告: 未找到 {_SERVICE_ROOT / '.env'} 或 {_TEST_IR_ROOT / '.env'}，"
-            "仅使用当前进程已有环境变量",
-            file=sys.stderr,
+        _LOG.warning(
+            "未找到 %s 或 %s，仅使用当前进程已有环境变量",
+            _SERVICE_ROOT / ".env",
+            _TEST_IR_ROOT / ".env",
         )
 
     _TEST_IR_ROOT.mkdir(parents=True, exist_ok=True)
@@ -56,24 +58,30 @@ def _ensure_env() -> None:
 
 
 def main() -> None:
-    _ensure_env()
+    try:
+        _ensure_env()
+    except ImportError as e:
+        _LOG.error("%s", e)
+        sys.exit(1)
 
     service = str(_SERVICE_ROOT)
     if service not in sys.path:
-        sys.path.insert(0, service)
+        sys.path.append(service)
 
     import ir_execution_service_app as app_entry
 
     host = (os.environ.get("IR_EXEC_HOST") or "0.0.0.0").strip()
     port = int((os.environ.get("IR_EXEC_PORT") or "8090").strip())
-    print(
-        f"IR 本地目录: {os.environ.get('LOWCODE_IR_DOWNLOAD_DIR')}\n"
-        f"请求 ir_path 需为该目录下的相对路径，例如 complicated_dsl.json 对应 test/complicated_dsl.json\n"
-        f"监听: http://{host}:{port}",
-        flush=True,
+    _LOG.info(
+        "IR 本地目录: %s\n请求 ir_path 需为该目录下的相对路径，例如 complicated_dsl.json 对应 test/complicated_dsl.json\n"
+        "监听: http://%s:%s",
+        os.environ.get("LOWCODE_IR_DOWNLOAD_DIR"),
+        host,
+        port,
     )
     app_entry.runner.run(host=host, port=port)
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     main()

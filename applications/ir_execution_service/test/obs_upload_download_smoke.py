@@ -18,17 +18,20 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import secrets
 import sys
 from pathlib import Path
 
+_LOG = logging.getLogger(__name__)
+
 # --- 从 .env 手工同步的配置（与 LOWCODE_IR_OBS_BUCKET、OBS_* 一致）---
-OBS_ACCESS_KEY_ID = "Jx96ZXEJ7GFIRezFaZyCqym9oTEyJUoK"
-OBS_SECRET_ACCESS_KEY = "7Fesmvbt8CCBsBOHRPfkunOmrRfo2Dpm"
-OBS_SERVER = "7.219.144.25"
+OBS_ACCESS_KEY_ID = ""
+OBS_SECRET_ACCESS_KEY = ""
+OBS_SERVER = ""
 OBS_REGION: str | None = None  # .env 里为空则保持 None
-LOWCODE_IR_OBS_BUCKET = "poissontest-bj"
+LOWCODE_IR_OBS_BUCKET = ""
 # ensure_ir_local_path 使用的缓存根（仅本脚本测试目录下，避免污染项目 .lowcode_ir_cache）
 LOWCODE_IR_DOWNLOAD_DIR_REL = ".obs_ir_cache_smoke"
 # -------------------------------------------------------------------
@@ -71,7 +74,7 @@ async def _main() -> None:
         file_path=upload_path,
     )
     if not ok_up:
-        print("upload_file 返回 False", file=sys.stderr)
+        _LOG.error("upload_file 返回 False")
         raise SystemExit(10)
 
     if download_path.exists():
@@ -83,16 +86,16 @@ async def _main() -> None:
         file_path=download_path,
     )
     if not ok_down:
-        print("download_file 返回 False", file=sys.stderr)
+        _LOG.error("download_file 返回 False")
         raise SystemExit(11)
 
     if download_path.read_bytes() != payload:
-        print("下载内容与上传不一致", file=sys.stderr)
+        _LOG.error("下载内容与上传不一致")
         raise SystemExit(12)
 
-    print("AioBotoClient upload_file + download_file OK")
-    print(f"- bucket: {LOWCODE_IR_OBS_BUCKET}")
-    print(f"- object_key: {object_key}")
+    _LOG.info("AioBotoClient upload_file + download_file OK")
+    _LOG.info("- bucket: %s", LOWCODE_IR_OBS_BUCKET)
+    _LOG.info("- object_key: %s", object_key)
 
     # --- ensure_ir_local_path：依赖进程环境变量 + 无参 AioBotoClient ---
     _apply_obs_env_to_process()
@@ -108,7 +111,7 @@ async def _main() -> None:
 
     service_root = test_dir.parent
     if str(service_root) not in sys.path:
-        sys.path.insert(0, str(service_root))
+        sys.path.append(str(service_root))
 
     from fastapi import HTTPException
 
@@ -117,21 +120,22 @@ async def _main() -> None:
     try:
         local_path = await ensure_ir_local_path(object_key)
     except HTTPException as e:
-        print(f"ensure_ir_local_path 失败: {e.status_code} {e.detail}", file=sys.stderr)
+        _LOG.error("ensure_ir_local_path 失败: %s %s", e.status_code, e.detail)
         raise SystemExit(16) from e
     if local_path.resolve() != cached_expected.resolve():
-        print(f"ensure_ir_local_path 返回路径与预期不一致: {local_path} != {cached_expected}", file=sys.stderr)
+        _LOG.error("ensure_ir_local_path 返回路径与预期不一致: %s != %s", local_path, cached_expected)
         raise SystemExit(13)
     if not local_path.is_file():
-        print(f"ensure_ir_local_path 未生成文件: {local_path}", file=sys.stderr)
+        _LOG.error("ensure_ir_local_path 未生成文件: %s", local_path)
         raise SystemExit(14)
     if local_path.read_bytes() != payload:
-        print("ensure_ir_local_path 落盘内容与上传不一致", file=sys.stderr)
+        _LOG.error("ensure_ir_local_path 落盘内容与上传不一致")
         raise SystemExit(15)
 
-    print("ensure_ir_local_path OK")
-    print(f"- local_path: {local_path}")
+    _LOG.info("ensure_ir_local_path OK")
+    _LOG.info("- local_path: %s", local_path)
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     asyncio.run(_main())

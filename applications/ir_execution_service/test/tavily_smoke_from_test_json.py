@@ -8,10 +8,13 @@ Smoke test: same Tavily params as applications/ir_execution_service/test/test.js
 from __future__ import annotations
 
 import json
+import logging
 import ssl
 import sys
 import urllib.error
 import urllib.request
+
+_LOG = logging.getLogger(__name__)
 
 # Copied from test.json → plugin_BCvUb.configs.tool
 URL = "https://api.tavily.com/search"
@@ -36,37 +39,38 @@ def main() -> int:
             status = resp.status
     except urllib.error.HTTPError as e:
         body = e.read().decode("utf-8", errors="replace")
-        print("HTTPError", e.code, e.reason)
-        print("body:", body[:2000])
+        _LOG.error("HTTPError %s %s", e.code, e.reason)
+        _LOG.error("body: %s", body[:2000])
         return 1
     except urllib.error.URLError as e:
-        print("URLError:", e.reason)
+        _LOG.error("URLError: %s", e.reason)
         return 1
 
-    print("HTTP status:", status)
+    _LOG.info("HTTP status: %s", status)
     try:
         obj = json.loads(raw)
     except json.JSONDecodeError:
-        print("Non-JSON body (first 500 chars):", raw[:500])
+        _LOG.error("Non-JSON body (first 500 chars): %s", raw[:500])
         return 1
 
-    print("Top-level keys:", sorted(obj.keys()))
+    _LOG.info("Top-level keys: %s", sorted(obj.keys()))
     results = obj.get("results")
     if isinstance(results, list):
-        print("results count:", len(results))
+        _LOG.info("results count: %s", len(results))
         for i, r in enumerate(results[:3]):
             title = (r or {}).get("title", "")
             url_ = (r or {}).get("url", "")
-            print(f"  [{i}] {title!r} -> {url_!r}")
+            _LOG.info("  [%s] %r -> %r", i, title, url_)
     else:
-        print("results field:", type(results), results)
+        _LOG.info("results field: %s %s", type(results), results)
 
     err = obj.get("error") or obj.get("detail")
     if err:
-        print("API error field:", err)
+        _LOG.info("API error field: %s", err)
 
     return 0 if results else 2
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     sys.exit(main())
