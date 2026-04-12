@@ -15,9 +15,13 @@ from typing import Dict
 from fastapi import FastAPI
 import uvicorn
 
+from openjiuwen_runtime.foundation.log import get_logger
+
 from .base_app import BaseApp, _setup_runtime_env, _parse_cli_args
 from .agent_app import AgentApp
 from .plugin_app import PluginApp
+
+logger = get_logger(__name__)
 
 
 class AppGroup:
@@ -112,9 +116,18 @@ class AppGroup:
                 if app._init_hook:
                     try:
                         await app._init_hook()
-                        print(f"[OK] {app.app_name} 初始化完成 (挂载于 {prefix})")
+                        logger.info(
+                            "[OK] %s 初始化完成 (挂载于 %s)",
+                            app.app_name,
+                            prefix,
+                        )
                     except Exception as e:
-                        print(f"[ERROR] {app.app_name} 初始化失败: {e}")
+                        logger.error(
+                            "[ERROR] %s 初始化失败: %s",
+                            app.app_name,
+                            e,
+                            exc_info=True,
+                        )
                         raise
 
         @self.app.on_event("shutdown")
@@ -124,9 +137,14 @@ class AppGroup:
                 if app._shutdown_hook:
                     try:
                         await app._shutdown_hook()
-                        print(f"[OK] {app.app_name} 关闭完成")
+                        logger.info("[OK] %s 关闭完成", app.app_name)
                     except Exception as e:
-                        print(f"[WARN] {app.app_name} 关闭钩子执行失败: {e}")
+                        logger.warning(
+                            "[WARN] %s 关闭钩子执行失败: %s",
+                            app.app_name,
+                            e,
+                            exc_info=True,
+                        )
 
     def _register_routes(self):
         """注册 AppGroup 特定路由"""
@@ -226,23 +244,38 @@ class AppGroup:
             self._register_lifecycle_events()
             self._routes_registered = True
 
-        # 打印启动信息
-        print(f"\n{'='*60}")
-        print(f"启动 {self.group_name} v{self.version}")
-        print(f"服务地址: http://{host}:{port}")
-        print(f"{'='*60}")
-        print(f"\n已挂载应用:")
+        lines = [
+            "",
+            "=" * 60,
+            f"启动 {self.group_name} v{self.version}",
+            f"服务地址: http://{host}:{port}",
+            "=" * 60,
+            "",
+            "已挂载应用:",
+        ]
         for prefix, app in self._mounted_apps.items():
-            print(f"  {prefix:15} -> {app.app_name} ({type(app).__name__})")
-        print(f"\n端点:")
-        print(f"  GET  /health              - 组健康检查")
-        print(f"  GET  /                    - 组信息")
+            lines.append(f"  {prefix:15} -> {app.app_name} ({type(app).__name__})")
+        lines.extend(
+            [
+                "",
+                "端点:",
+                "  GET  /health              - 组健康检查",
+                "  GET  /                    - 组信息",
+            ]
+        )
         for prefix in self._mounted_apps:
             app = self._mounted_apps[prefix]
-            print(f"  GET  {prefix}/health        - {prefix.strip('/')} 健康检查")
+            lines.append(f"  GET  {prefix}/health        - {prefix.strip('/')} 健康检查")
             if isinstance(app, AgentApp):
-                print(f"  POST {prefix}/query         - {prefix.strip('/')} 查询")
-        print(f"\nAPI 文档: http://{host}:{port}/docs")
-        print(f"{'='*60}\n")
+                lines.append(f"  POST {prefix}/query         - {prefix.strip('/')} 查询")
+        lines.extend(
+            [
+                "",
+                f"API 文档: http://{host}:{port}/docs",
+                "=" * 60,
+                "",
+            ]
+        )
+        logger.info("%s", "\n".join(lines))
 
         uvicorn.run(self.app, host=host, port=port, **kwargs)

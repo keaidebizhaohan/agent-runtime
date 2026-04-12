@@ -11,7 +11,6 @@
 """
 
 import asyncio
-import logging
 import os
 import shutil
 import subprocess
@@ -26,8 +25,9 @@ from ...models.enums import DeploymentStatus
 from ..base.deployer import Deployer
 from ..base.models import DeployContext, DeployResult
 from .models import SubprocessParams
+from openjiuwen_runtime.foundation.log import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class LocalSubprocessDeployer(Deployer[SubprocessParams]):
@@ -56,9 +56,9 @@ class LocalSubprocessDeployer(Deployer[SubprocessParams]):
                 )
                 success = result.returncode == 0
                 if success:
-                    logger.info(f"Killed process {pid}")
+                    logger.info("Killed process %s", pid)
                 else:
-                    logger.warning(f"Failed to kill process {pid}: {result.stderr}")
+                    logger.warning("Failed to kill process %s: %s", pid, result.stderr)
                 return success
             else:
                 result = subprocess.run(
@@ -68,12 +68,12 @@ class LocalSubprocessDeployer(Deployer[SubprocessParams]):
                 )
                 success = result.returncode == 0
                 if success:
-                    logger.info(f"Killed process {pid}")
+                    logger.info("Killed process %s", pid)
                 else:
-                    logger.warning(f"Failed to kill process {pid}")
+                    logger.warning("Failed to kill process %s", pid)
                 return success
         except Exception as e:
-            logger.error(f"Error killing process {pid}: {e}")
+            logger.error("Error killing process %s: %s", pid, e)
             return False
 
     def _check_process_by_pid(self, pid: int) -> bool:
@@ -119,7 +119,7 @@ class LocalSubprocessDeployer(Deployer[SubprocessParams]):
             DeployResult: 部署结果
         """
         deployment_id = ctx.deployment_id
-        logger.info(f"Deploying subprocess: deployment_id={ctx.deployment_id}, host={ctx.host}")
+        logger.info("Deploying subprocess: deployment_id=%s, host=%s", ctx.deployment_id, ctx.host)
         try:
             subprocess_params = ctx.params or SubprocessParams()
             whl_path = subprocess_params.whl_path
@@ -132,20 +132,20 @@ class LocalSubprocessDeployer(Deployer[SubprocessParams]):
 
             # 创建虚拟环境
             venv_path = self.venv_manager.create_venv(deployment_id)
-            logger.info(f"Virtual environment created: {venv_path}")
+            logger.info("Virtual environment created: %s", venv_path)
 
             # 获取所有 .whl 文件
-            logger.info(f"dist_path: {settings.dist_path}")
+            logger.info("dist_path: %s", settings.dist_path)
             whl_files = list(settings.dist_path.glob("*.whl"))
             if not whl_files:
                 raise RuntimeError(f"No .whl files found in dist directory: {settings.dist_path}")
 
-            logger.info(f"whl_files: {whl_files}")
+            logger.info("whl_files: %s", whl_files)
 
             # 循环安装所有 whl 包
             for whl_file in whl_files:
                 self.venv_manager.install_whl(deployment_id, str(whl_file))
-                logger.info(f"Installed WHL package: {whl_file}")
+                logger.info("Installed WHL package: %s", whl_file)
 
             # 获取虚拟环境Python解释器
             python_executable = self.venv_manager.get_python_executable(deployment_id)
@@ -163,7 +163,7 @@ class LocalSubprocessDeployer(Deployer[SubprocessParams]):
             ]
             if ir_path:
                 cmd.extend(["--irpath", ir_path])
-            logger.debug(f"Command: {cmd}")
+            logger.debug("Command: %s", cmd)
 
             # 6. 启动进程 (Windows: 使用新进程组，避免Ctrl+C影响子进程)
             creation_flags = 0
@@ -175,7 +175,7 @@ class LocalSubprocessDeployer(Deployer[SubprocessParams]):
             # 通过环境变量传递 userdata，避免在 ps/任务管理器中泄露敏感信息
             if userdata:
                 env["RUNTIME_USERDATA"] = userdata
-                logger.info(f"Using userdata: {mask_userdata(userdata)}")
+                logger.info("Using userdata: %s", mask_userdata(userdata))
 
             process = subprocess.Popen(
                 cmd,
@@ -192,11 +192,16 @@ class LocalSubprocessDeployer(Deployer[SubprocessParams]):
                 # 进程已经退出，读取错误信息
                 stdout, stderr = process.communicate()
                 error_msg = stderr.decode('utf-8', errors='ignore') or stdout.decode('utf-8', errors='ignore') or "Unknown error"
-                logger.error(f"Process exited for {deployment_id}: {error_msg}")
+                logger.error("Process exited for %s: %s", deployment_id, error_msg)
                 raise RuntimeError(f"Process exited: {error_msg}")
 
             url = f"http://{settings.IP}:{ctx.port}/"
-            logger.info(f"Deployment {deployment_id} succeeded, PID: {process.pid}, URL: {url}")
+            logger.info(
+                "Deployment %s succeeded, PID: %s, URL: %s",
+                deployment_id,
+                process.pid,
+                url,
+            )
 
             return DeployResult(
                 success=True,
@@ -208,7 +213,11 @@ class LocalSubprocessDeployer(Deployer[SubprocessParams]):
             )
 
         except Exception as e:
-            logger.error(f"Subprocess deploy failed: deployment_id={ctx.deployment_id}, error={str(e)}")
+            logger.error(
+                "Subprocess deploy failed: deployment_id=%s, error=%s",
+                ctx.deployment_id,
+                str(e),
+            )
             return DeployResult(success=False,
                                 deployment_id=deployment_id, message=f"Deployment failed: {str(e)}")
 
@@ -224,28 +233,35 @@ class LocalSubprocessDeployer(Deployer[SubprocessParams]):
         """
         pid = kwargs.get("pid")
         venv_path = kwargs.get("venv_path")
-        logger.info(f"Stopping subprocess: deployment_id={deployment_id}, pid={pid}")
+        logger.info("Stopping subprocess: deployment_id=%s, pid=%s", deployment_id, pid)
         try:
             if deployment_id in self._processes:
                 process = self._processes[deployment_id]
-                logger.debug(f"Terminating process: deployment_id={deployment_id}, pid={process.pid}")
+                logger.debug(
+                    "Terminating process: deployment_id=%s, pid=%s",
+                    deployment_id,
+                    process.pid,
+                )
                 process.terminate()
                 try:
                     await asyncio.wait_for(process.wait(), timeout=10)
                 except asyncio.TimeoutError:
-                    logger.warning(f"Process did not terminate gracefully, killing: deployment_id={deployment_id}")
+                    logger.warning(
+                        "Process did not terminate gracefully, killing: deployment_id=%s",
+                        deployment_id,
+                    )
                     process.kill()
                 del self._processes[deployment_id]
             elif pid:
                 success = self._kill_by_pid(pid)
                 if not success:
-                    logger.warning(f"Failed to kill process by pid: {pid}")
+                    logger.warning("Failed to kill process by pid: %s", pid)
 
             if venv_path and os.path.exists(venv_path):
-                logger.debug(f"Deleting virtual environment: {venv_path}")
+                logger.debug("Deleting virtual environment: %s", venv_path)
                 shutil.rmtree(venv_path, ignore_errors=True)
 
-            logger.info(f"Subprocess stopped: deployment_id={deployment_id}")
+            logger.info("Subprocess stopped: deployment_id=%s", deployment_id)
             return DeployResult(
                 success=True,
                 deployment_id=deployment_id,
@@ -253,7 +269,11 @@ class LocalSubprocessDeployer(Deployer[SubprocessParams]):
             )
 
         except Exception as e:
-            logger.error(f"Subprocess stop failed: deployment_id={deployment_id}, error={str(e)}")
+            logger.error(
+                "Subprocess stop failed: deployment_id=%s, error=%s",
+                deployment_id,
+                str(e),
+            )
             return DeployResult(
                 success=False,
                 deployment_id=deployment_id,
@@ -271,7 +291,11 @@ class LocalSubprocessDeployer(Deployer[SubprocessParams]):
             DeploymentStatus: 部署状态
         """
         pid = kwargs.get("pid")
-        logger.debug(f"Getting subprocess status: deployment_id={deployment_id}, pid={pid}")
+        logger.debug(
+            "Getting subprocess status: deployment_id=%s, pid=%s",
+            deployment_id,
+            pid,
+        )
 
         if deployment_id in self._processes:
             process = self._processes[deployment_id]

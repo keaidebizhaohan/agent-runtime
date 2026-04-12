@@ -7,7 +7,6 @@
 并将其注入到请求状态中，供后续端点使用。
 """
 
-import logging
 from typing import Optional
 
 from fastapi import Request, status
@@ -15,7 +14,9 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.types import ASGIApp
 
-logger = logging.getLogger(__name__)
+from openjiuwen_runtime.foundation.log import get_logger
+
+logger = get_logger(__name__)
 
 
 class TenantContextMiddleware(BaseHTTPMiddleware):

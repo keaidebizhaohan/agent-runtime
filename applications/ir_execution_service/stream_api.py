@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-import logging
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator
 
@@ -29,6 +28,10 @@ from runtime_support.execution_request import ExecutionPrepareError, prepare_exe
 from runtime_support.runtime_bootstrap import ensure_runtime_ready
 
 from react_agent_builder import build_react_agent_from_ir
+
+from openjiuwen_runtime.foundation.log import get_logger
+
+_log = get_logger(__name__)
 
 
 @asynccontextmanager
@@ -211,7 +214,7 @@ async def _workflow_stream_event_source(chunk_stream: AsyncIterator[Any], timeou
                     data={"type": data_type, "payload": payload},
                 ).model_dump_json()
     except asyncio.TimeoutError:
-        logging.getLogger(__name__).error(
+        _log.error(
             "workflow stream execution timeout after %.3fs",
             timeout_seconds,
             exc_info=True,
@@ -219,7 +222,7 @@ async def _workflow_stream_event_source(chunk_stream: AsyncIterator[Any], timeou
         c = LowcodeApiResponseCode.EXECUTION_TIMEOUT
         yield _stream_error_event(c, message=c.format_message())
     except BaseError as e:
-        logging.getLogger(__name__).exception("workflow stream execution failed: %s", e)
+        _log.exception("workflow stream execution failed: %s", e)
         detail_code = int(getattr(e, "code", LowcodeApiResponseCode.INTERNAL_ERROR))
         msg = str(getattr(e, "message", "") or e)
         yield _stream_error_event(
@@ -232,11 +235,11 @@ async def _workflow_stream_event_source(chunk_stream: AsyncIterator[Any], timeou
         yield _stream_error_event(c)
         raise
     except WorkflowLlmApiKeyMissingError as e:
-        logging.getLogger(__name__).exception("workflow stream missing LLM API key: %s", e)
+        _log.exception("workflow stream missing LLM API key: %s", e)
         c = LowcodeApiResponseCode.LLM_API_KEY_MISSING
         yield _stream_error_event(c, message=str(e))
     except Exception as e:
-        logging.getLogger(__name__).exception("workflow stream internal error: %s", e)
+        _log.exception("workflow stream internal error: %s", e)
         c = LowcodeApiResponseCode.INTERNAL_ERROR
         yield _stream_error_event(c, message=str(e))
 
@@ -257,7 +260,7 @@ async def _agent_stream_event_source(chunk_stream: AsyncIterator[Any], timeout_s
                     data={"type": data_type, "payload": payload},
                 ).model_dump_json()
     except asyncio.TimeoutError:
-        logging.getLogger(__name__).error(
+        _log.error(
             "agent stream execution timeout after %.3fs",
             timeout_seconds,
             exc_info=True,
@@ -265,7 +268,7 @@ async def _agent_stream_event_source(chunk_stream: AsyncIterator[Any], timeout_s
         c = LowcodeApiResponseCode.EXECUTION_TIMEOUT
         yield _stream_error_event(c, message=c.format_message())
     except BaseError as e:
-        logging.getLogger(__name__).exception("agent stream execution failed: %s", e)
+        _log.exception("agent stream execution failed: %s", e)
         detail_code = int(getattr(e, "code", LowcodeApiResponseCode.INTERNAL_ERROR))
         msg = str(getattr(e, "message", "") or e)
         yield _stream_error_event(
@@ -278,11 +281,11 @@ async def _agent_stream_event_source(chunk_stream: AsyncIterator[Any], timeout_s
         yield _stream_error_event(c)
         raise
     except WorkflowLlmApiKeyMissingError as e:
-        logging.getLogger(__name__).exception("agent stream missing LLM API key: %s", e)
+        _log.exception("agent stream missing LLM API key: %s", e)
         c = LowcodeApiResponseCode.LLM_API_KEY_MISSING
         yield _stream_error_event(c, message=str(e))
     except Exception as e:
-        logging.getLogger(__name__).exception("agent stream internal error: %s", e)
+        _log.exception("agent stream internal error: %s", e)
         c = LowcodeApiResponseCode.INTERNAL_ERROR
         yield _stream_error_event(c, message=str(e))
 

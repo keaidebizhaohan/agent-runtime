@@ -12,18 +12,19 @@ AgentApp - Agent 应用类
 
 import json
 import asyncio
-import logging
 import inspect
 import contextvars
 from typing import Callable, Optional
 from fastapi import HTTPException, Request
 from fastapi.responses import StreamingResponse
 
+from openjiuwen_runtime.foundation.log import get_logger
+
 from .base_app import BaseApp
 from .middleware import Middleware, MiddlewareContext
 from ..models.request import QueryRequest, ResetConversationRequest
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class AgentApp(BaseApp):
@@ -177,7 +178,10 @@ class AgentApp(BaseApp):
                                 processed_messages, query_request, context
                             )
                         except Exception:
-                            pass
+                            logger.exception(
+                                "Middleware before_query failed: %s",
+                                type(mw).__name__,
+                            )
 
                     try:
                         chunk_count = 0
@@ -198,7 +202,10 @@ class AgentApp(BaseApp):
                                             processed_messages, query_request, processed_msg, context
                                         )
                                     except Exception:
-                                        pass
+                                        logger.exception(
+                                            "Middleware before_response failed: %s",
+                                            type(mw).__name__,
+                                        )
 
                                 if chunk_count <= 3:
                                     logger.info(f"[generate] yielding chunk #{chunk_count}, "
@@ -214,7 +221,10 @@ class AgentApp(BaseApp):
                             try:
                                 await mw.after_query(processed_messages, query_request, context)
                             except Exception:
-                                pass
+                                logger.exception(
+                                    "Middleware after_query failed: %s",
+                                    type(mw).__name__,
+                                )
 
                         logger.info(
                             f"Query completed - conversation_id: {query_request.conversation_id}, "
@@ -231,7 +241,10 @@ class AgentApp(BaseApp):
                             try:
                                 await mw.on_error(processed_messages, query_request, e, context)
                             except Exception:
-                                pass
+                                logger.exception(
+                                    "Middleware on_error failed: %s",
+                                    type(mw).__name__,
+                                )
 
                         # 发送错误事件
                         error_event = {

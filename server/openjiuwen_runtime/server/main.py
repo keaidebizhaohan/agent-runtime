@@ -6,7 +6,6 @@
 FastAPI 服务器，提供 Agent 部署管理 REST API（支持租户隔离）
 """
 
-import logging
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -14,6 +13,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, Query, Request, UploadFile, status
 from fastapi.responses import JSONResponse
 
+from openjiuwen_runtime.foundation.log import get_logger
 from openjiuwen_runtime.foundation.config import settings
 from openjiuwen_runtime.foundation.db.mysql_handler import MySQLHandler
 from openjiuwen_runtime.foundation.db.sqlite_handler import SQLiteHandler
@@ -24,13 +24,7 @@ from openjiuwen_runtime.management.models.enums import DeploymentType, Deploymen
 from .middleware.tenant import TenantContextMiddleware, get_tenant_context
 from .utils import mask_userdata
 
-
-# 配置日志
-logging.basicConfig(
-    level=logging.DEBUG,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # 追踪已分配的端口，防止并发部署时端口冲突
 _allocated_ports: set[int] = set()

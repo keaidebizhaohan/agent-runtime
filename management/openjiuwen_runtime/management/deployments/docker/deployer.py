@@ -11,7 +11,6 @@
 """
 
 import asyncio
-import logging
 import os
 import subprocess
 import shutil
@@ -24,8 +23,9 @@ from .models import DockerParams
 from ...models.enums import DeploymentStatus
 
 from openjiuwen_runtime.foundation.config import settings
+from openjiuwen_runtime.foundation.log import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class DockerDeployer(Deployer[DockerParams]):
@@ -39,7 +39,7 @@ class DockerDeployer(Deployer[DockerParams]):
         self.default_host = default_host
         self.docker_host = docker_host
         self._containers: dict[str, str] = {}
-        logger.debug(f"DockerDeployer initialized: docker_host={docker_host}")
+        logger.debug("DockerDeployer initialized: docker_host=%s", docker_host)
 
     def _build_docker_command(self, *args: str) -> list[str]:
         """构建 Docker 命令"""
@@ -53,7 +53,7 @@ class DockerDeployer(Deployer[DockerParams]):
         """运行 Docker 命令"""
         cmd = self._build_docker_command(*args)
 
-        logger.debug(f"Running docker command: {' '.join(cmd)}")
+        logger.debug("Running docker command: %s", " ".join(cmd))
         process = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
@@ -104,23 +104,23 @@ class DockerDeployer(Deployer[DockerParams]):
             raise RuntimeError("Environment variable LOWCODE_IMAGE is not set")
         create_args.append(image_name)
 
-        logger.debug(f"Creating lowcode agent container: {container_name}")
+        logger.debug("Creating lowcode agent container: %s", container_name)
         success, output = await self._run_docker_command(*create_args)
         if not success:
             raise RuntimeError(f"create lowcode container failed: {output}")
 
         container_id = output.strip()
-        logger.debug(f"container created: {container_id}")
+        logger.debug("container created: %s", container_id)
 
         # 复制 ir.json 到容器
         target_path = f"{container_name}:/app/ir.json"
-        logger.debug(f"docker cp {ir_source_path} -> {target_path}")
+        logger.debug("docker cp %s -> %s", ir_source_path, target_path)
         success, cp_out = await self._run_docker_command("cp", ir_source_path, target_path)
         if not success:
             raise RuntimeError(f"docker cp failed: {cp_out}")
 
         # 启动容器
-        logger.debug(f"Start container: {container_name}")
+        logger.debug("Start container: %s", container_name)
         success, start_out = await self._run_docker_command("start", container_id)
         if not success:
             raise RuntimeError(f"Start container failed: {start_out}")
@@ -136,7 +136,7 @@ class DockerDeployer(Deployer[DockerParams]):
             DeployResult: 部署结果
         """
         deployment_id = ctx.deployment_id
-        logger.info(f"Deploying docker: deployment_id={deployment_id}, host={ctx.host}")
+        logger.info("Deploying docker: deployment_id=%s, host=%s", deployment_id, ctx.host)
 
         try:
             docker_params = ctx.params or DockerParams()
@@ -150,7 +150,10 @@ class DockerDeployer(Deployer[DockerParams]):
             iport = "8090"
 
             import json
-            logger.debug(f"docker_params 完整内容: \n{json.dumps(docker_params.__dict__, indent=2, ensure_ascii=False)}")
+            logger.debug(
+                "docker_params 完整内容: \n%s",
+                json.dumps(docker_params.__dict__, indent=2, ensure_ascii=False),
+            )
 
             # 非低码情况
             if not ir_path:
@@ -178,7 +181,12 @@ class DockerDeployer(Deployer[DockerParams]):
             port = port_output.strip().split(":")[-1]
             url = f"http://{settings.IP}:{port}"
 
-            logger.info(f"Docker deployed: deployment_id={deployment_id}, container={container_name}, url={url}")
+            logger.info(
+                "Docker deployed: deployment_id=%s, container=%s, url=%s",
+                deployment_id,
+                container_name,
+                url,
+            )
             return DeployResult(
                 success=True,
                 deployment_id=deployment_id,
@@ -187,7 +195,7 @@ class DockerDeployer(Deployer[DockerParams]):
             )
 
         except Exception as e:
-            logger.error(f"Docker deploy failed: deployment_id={deployment_id}, error={str(e)}")
+            logger.error("Docker deploy failed: deployment_id=%s, error=%s", deployment_id, str(e))
             return DeployResult(
                 success=False,
                 deployment_id=deployment_id,
@@ -205,19 +213,31 @@ class DockerDeployer(Deployer[DockerParams]):
             DeployResult: 停止结果
         """
         container_name = kwargs.get("container_name") or f"deploy_{deployment_id}"
-        logger.info(f"Stopping docker: deployment_id={deployment_id}, container_name={container_name}")
+        logger.info(
+            "Stopping docker: deployment_id=%s, container_name=%s",
+            deployment_id,
+            container_name,
+        )
 
         try:
             # 停止容器
-            logger.debug(f"Stopping container: container_name={container_name}")
+            logger.debug("Stopping container: container_name=%s", container_name)
             success, output = await self._run_docker_command("stop", container_name)
             if not success:
-                logger.warning(f"Docker stop failed: deployment_id={deployment_id}, error={output}")
+                logger.warning(
+                    "Docker stop failed: deployment_id=%s, error=%s",
+                    deployment_id,
+                    output,
+                )
 
             # 删除容器
             success, output = await self._run_docker_command("rm", container_name)
             if not success:
-                logger.warning(f"Docker rm failed: deployment_id={deployment_id}, error={output}")
+                logger.warning(
+                    "Docker rm failed: deployment_id=%s, error=%s",
+                    deployment_id,
+                    output,
+                )
 
             # 删除镜像
             # image_name = f"{deployment_id}:latest"
@@ -230,10 +250,10 @@ class DockerDeployer(Deployer[DockerParams]):
 
             # 清理部署目录
             deploy_context_dir = settings.deploy_path / deployment_id
-            logger.debug(f"Cleaning deploy directory: {deploy_context_dir}")
+            logger.debug("Cleaning deploy directory: %s", deploy_context_dir)
             shutil.rmtree(deploy_context_dir, ignore_errors=True)
 
-            logger.info(f"Docker stopped: deployment_id={deployment_id}")
+            logger.info("Docker stopped: deployment_id=%s", deployment_id)
             return DeployResult(
                 success=True,
                 deployment_id=deployment_id,
@@ -241,15 +261,7 @@ class DockerDeployer(Deployer[DockerParams]):
             )
 
         except Exception as e:
-            logger.error(f"Docker stop failed: deployment_id={deployment_id}, error={str(e)}")
-            return DeployResult(
-                success=False,
-                deployment_id=deployment_id,
-                message=f"Stop failed: {str(e)}"
-            )
-
-        except Exception as e:
-            logger.error(f"Docker stop failed: deployment_id={deployment_id}, error={str(e)}")
+            logger.error("Docker stop failed: deployment_id=%s, error=%s", deployment_id, str(e))
             return DeployResult(
                 success=False,
                 deployment_id=deployment_id,
@@ -267,7 +279,11 @@ class DockerDeployer(Deployer[DockerParams]):
             DeploymentStatus: 部署状态
         """
         container_name = kwargs.get("container_name") or f"deploy_{deployment_id}"
-        logger.debug(f"Getting docker status: deployment_id={deployment_id}, container_name={container_name}")
+        logger.debug(
+            "Getting docker status: deployment_id=%s, container_name=%s",
+            deployment_id,
+            container_name,
+        )
 
         success, output = await self._run_docker_command(
             "inspect", "-f", "{{.State.Status}}", container_name

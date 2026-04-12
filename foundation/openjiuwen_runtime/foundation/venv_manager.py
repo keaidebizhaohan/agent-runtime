@@ -3,7 +3,6 @@
 
 """虚拟环境管理器"""
 
-import logging
 import shutil
 import subprocess
 import sys
@@ -11,9 +10,19 @@ import os
 import shlex
 from pathlib import Path
 from typing import Optional
+from .log import get_logger
+
 from .config import settings
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
+
+
+def _resolve_uv_executable() -> str:
+    """将 uv 解析为绝对路径，满足外部进程调用规范。"""
+    resolved = shutil.which("uv")
+    if not resolved:
+        raise RuntimeError("uv executable not found in PATH")
+    return resolved
 
 
 class VirtualEnvironmentManager:
@@ -51,24 +60,29 @@ class VirtualEnvironmentManager:
         venv_path = self.get_venv_path(deployment_id)
 
         if venv_path.exists():
-            logger.info(f"Virtual environment already exists: {venv_path}")
+            logger.info("Virtual environment already exists: %s", venv_path)
             return venv_path
 
-        logger.info(f"Creating virtual environment: {venv_path}")
+        logger.info("Creating virtual environment: %s", venv_path)
 
         try:
             # 使用 uv 创建虚拟环境
+            uv_exe = _resolve_uv_executable()
             result = subprocess.run(
-                ["uv", "venv", str(venv_path)],
+                [uv_exe, "venv", str(venv_path)],
                 capture_output=True,
                 text=True
             )
 
             if result.returncode != 0:
-                logger.warning(f"venv command returned code {result.returncode}: {result.stderr}")
+                logger.warning(
+                    "venv command returned code %s: %s",
+                    result.returncode,
+                    result.stderr,
+                )
 
             if not venv_path.exists():
-                logger.error(f"Virtual environment directory not created: {venv_path}")
+                logger.error("Virtual environment directory not created: %s", venv_path)
                 raise RuntimeError(f"Failed to create venv: directory not created")
 
             python_exe = self.get_python_executable(deployment_id)
@@ -79,31 +93,35 @@ class VirtualEnvironmentManager:
                 pip_exe = venv_path / "bin" / "pip"
 
             if not python_exe.exists():
-                logger.error(f"Python executable not found in venv: {python_exe}")
+                logger.error("Python executable not found in venv: %s", python_exe)
                 raise RuntimeError(f"Failed to create venv: python executable not found")
 
             if not pip_exe.exists():
-                logger.info(f"pip not found, running ensurepip...")
+                logger.info("pip not found, running ensurepip...")
                 ensure_result = subprocess.run(
                     [str(python_exe), "-m", "ensurepip", "--upgrade"],
                     capture_output=True,
                     text=True
                 )
                 if ensure_result.returncode != 0:
-                    logger.warning(f"ensurepip returned code {ensure_result.returncode}: {ensure_result.stderr}")
+                    logger.warning(
+                        "ensurepip returned code %s: %s",
+                        ensure_result.returncode,
+                        ensure_result.stderr,
+                    )
                     get_pip_result = subprocess.run(
                         [str(python_exe), "-m", "pip", "install", "--upgrade", "pip"],
                         capture_output=True,
                         text=True
                     )
                     if get_pip_result.returncode != 0:
-                        logger.error(f"Failed to bootstrap pip: {get_pip_result.stderr}")
+                        logger.error("Failed to bootstrap pip: %s", get_pip_result.stderr)
                         raise RuntimeError(f"Failed to create venv: pip not available")
 
-            logger.info(f"Virtual environment created successfully: {venv_path}")
+            logger.info("Virtual environment created successfully: %s", venv_path)
             return venv_path
         except subprocess.CalledProcessError as e:
-            logger.error(f"Failed to create virtual environment: {e.stderr}")
+            logger.error("Failed to create virtual environment: %s", e.stderr)
             raise RuntimeError(f"Failed to create venv: {e}")
 
     def get_python_executable(self, deployment_id: str) -> Path:
@@ -153,18 +171,19 @@ class VirtualEnvironmentManager:
         """
         python_executable = self.get_python_executable(deployment_id)
 
-        logger.info(f"Installing WHL package: {whl_path} into {deployment_id}")
+        logger.info("Installing WHL package: %s into %s", whl_path, deployment_id)
 
         uv_extra_args_list = shlex.split(settings.UV_EXTRA_ARGS.strip())
 
         # 使用 uv pip 安装包，通过虚拟环境路径指定目标环境
+        uv_exe = _resolve_uv_executable()
         cmd = [
-            "uv", "pip", "install",
+            uv_exe, "pip", "install",
             whl_path,
             "--python", str(python_executable),
             *uv_extra_args_list
         ]
-        logger.debug(f"Command: {' '.join(cmd)}")
+        logger.debug("Command: %s", " ".join(cmd))
 
         try:
             env = os.environ.copy()
@@ -178,7 +197,11 @@ class VirtualEnvironmentManager:
             )
 
             if result.returncode != 0:
-                logger.warning(f"pip install returned code {result.returncode}: {result.stderr}")
+                logger.warning(
+                    "pip install returned code %s: %s",
+                    result.returncode,
+                    result.stderr,
+                )
 
             result = subprocess.run(
                 [str(python_executable), "-m", "pip", "list", "--format=json"],
@@ -193,17 +216,17 @@ class VirtualEnvironmentManager:
                 whl_name = Path(whl_path).stem.split("-")[0].lower().replace("_", "-")
                 for pkg in installed_packages:
                     if pkg["name"].lower().replace("_", "-") == whl_name:
-                        logger.info(f"WHL package installed successfully: {whl_path}")
+                        logger.info("WHL package installed successfully: %s", whl_path)
                         return True
 
-                logger.error(f"WHL package not found in installed list: {whl_path}")
+                logger.error("WHL package not found in installed list: %s", whl_path)
                 raise RuntimeError(f"Failed to install WHL package: package not in pip list")
             else:
-                logger.error(f"Failed to verify installation: {result.stderr}")
+                logger.error("Failed to verify installation: %s", result.stderr)
                 raise RuntimeError(f"Failed to verify WHL installation")
 
         except Exception as e:
-            logger.error(f"Failed to install WHL: {e}")
+            logger.error("Failed to install WHL: %s", e)
             raise RuntimeError(f"Failed to install WHL package: {e}")
 
     def delete_venv(self, deployment_id: str) -> bool:
@@ -219,15 +242,15 @@ class VirtualEnvironmentManager:
         venv_path = self.get_venv_path(deployment_id)
 
         if not venv_path.exists():
-            logger.warning(f"Virtual environment not found: {venv_path}")
+            logger.warning("Virtual environment not found: %s", venv_path)
             return False
 
-        logger.info(f"Deleting virtual environment: {venv_path}")
+        logger.info("Deleting virtual environment: %s", venv_path)
 
         try:
             shutil.rmtree(venv_path)
-            logger.info(f"Virtual environment deleted: {venv_path}")
+            logger.info("Virtual environment deleted: %s", venv_path)
             return True
         except Exception as e:
-            logger.error(f"Failed to delete virtual environment: {e}")
+            logger.error("Failed to delete virtual environment: %s", e)
             return False

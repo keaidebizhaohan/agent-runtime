@@ -8,7 +8,6 @@
 
 import asyncio
 import json
-import logging
 import sys
 from pathlib import Path
 
@@ -18,13 +17,6 @@ from dotenv import load_dotenv
 from openjiuwen_runtime.management.manager import DeploymentManager
 from openjiuwen_runtime.management.models.enums import DeploymentType, DeploymentStatus
 from openjiuwen_runtime.foundation.db.sqlite_handler import SQLiteHandler
-
-# 配置日志输出
-logging.basicConfig(
-    level=logging.DEBUG,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
-)
 
 # 加载.env配置文件（固定位置：manager根目录）
 _manager_root = Path(__file__).parent.parent.parent

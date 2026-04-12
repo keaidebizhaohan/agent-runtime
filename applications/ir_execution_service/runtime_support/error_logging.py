@@ -7,7 +7,6 @@ import logging
 import os
 from pathlib import Path
 
-
 def setup_error_file_logging() -> Path:
     """为本应用单独落盘错误日志（ERROR+），避免被大量 INFO 淹没。
 

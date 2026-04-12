@@ -13,12 +13,13 @@
 
 from __future__ import annotations
 
-import logging
 import os
 import sys
 from pathlib import Path
 
-_LOG = logging.getLogger(__name__)
+from openjiuwen_runtime.foundation.log import get_logger
+
+_LOG = get_logger(__name__)
 
 # 本文件在 .../ir_execution_service/test/；应用与 ir_execution_service_app 在上一级
 _SERVICE_ROOT = Path(__file__).resolve().parent.parent
@@ -83,5 +84,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     main()

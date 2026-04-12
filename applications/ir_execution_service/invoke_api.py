@@ -9,12 +9,12 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 from typing import Any
 
 from fastapi.responses import JSONResponse
 
 from openjiuwen.core.runner import Runner
+from openjiuwen_runtime.foundation.log import get_logger
 from openjiuwen_studio.schemas import ResponseModel
 
 from dsl_workflow_dependency_loader import WorkflowLlmApiKeyMissingError
@@ -29,6 +29,8 @@ from runtime_support.execution_request import ExecutionPrepareError, prepare_exe
 from runtime_support.runtime_bootstrap import ensure_runtime_ready
 
 JSON_MEDIA_TYPE = "application/json; charset=utf-8"
+
+_log = get_logger(__name__)
 
 
 def _json_response(model: ResponseModel) -> JSONResponse:
@@ -184,7 +186,7 @@ async def handle_execute_invoke(body: Any) -> JSONResponse:
     try:
         await ensure_runtime_ready()
     except Exception as e:
-        logging.getLogger(__name__).exception("service unavailable during startup: %s", e)
+        _log.exception("service unavailable during startup: %s", e)
         return _json_response(build_error_response_model(LowcodeApiResponseCode.SERVICE_UNAVAILABLE, message=str(e)))
 
     try:
@@ -213,7 +215,7 @@ async def handle_execute_invoke(body: Any) -> JSONResponse:
                 timeout=prepared.timeout_seconds,
             )
         except Exception as e:
-            logging.getLogger(__name__).exception("workflow invoke failed: %s", e)
+            _log.exception("workflow invoke failed: %s", e)
             return _json_response(_invoke_exception_to_model(e))
 
         return _json_response(_workflow_invoke_result_to_model(wf_output))
@@ -229,7 +231,7 @@ async def handle_execute_invoke(body: Any) -> JSONResponse:
             timeout=prepared.timeout_seconds,
         )
     except Exception as e:
-        logging.getLogger(__name__).exception("agent invoke failed: %s", e)
+        _log.exception("agent invoke failed: %s", e)
         return _json_response(_invoke_exception_to_model(e))
 
     return _json_response(_agent_invoke_result_to_model(agent_output))

@@ -9,9 +9,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from openjiuwen_runtime.foundation.log import get_logger
 from openjiuwen_runtime.management import DeploymentManager, DeployMode
 from openjiuwen_runtime.foundation.db.sqlite_handler import SQLiteHandler
 from openjiuwen_runtime.foundation.packaging import package_python_to_whl
+
+logger = get_logger(__name__)
 
 
 class ManagerTest(unittest.IsolatedAsyncioTestCase):
@@ -130,4 +133,4 @@ if __name__ == '__main__':
     asyncio.run(a.asyncSetUp())
     result = asyncio.run(a.test_deploy_simple_agent_whl())
     asyncio.run(a.asyncTearDown())
-    print(result)
+    logger.info("%s", result)

@@ -11,7 +11,10 @@ It creates a simple agent that echoes messages back.
 import asyncio
 from typing import AsyncIterator, Tuple
 
+from openjiuwen_runtime.foundation.log import get_logger
 from openjiuwen_runtime.service import AgentApp
+
+logger = get_logger(__name__)
 
 
 class MockAgent:
@@ -67,7 +70,7 @@ app = AgentApp(
 async def init():
     """Initialize the mock agent"""
     app.agent = MockAgent()
-    print("[OK] MockAgent initialized")
+    logger.info("[OK] MockAgent initialized")
 
 
 @app.query
@@ -84,16 +87,16 @@ async def query(msgs, request):
 async def shutdown():
     """Cleanup resources"""
     if app.agent:
-        print("[OK] MockAgent cleaned up")
+        logger.info("[OK] MockAgent cleaned up")
 
 
 if __name__ == "__main__":
     # Run the app with command line args support
     # Usage: python simple_agent_app.py [--host HOST] [--port PORT]
-    print("""
-Starting SimpleAgent...
-Usage: python simple_agent_app.py [--host HOST] [--port PORT]
-Example: curl -X POST http://127.0.0.1:8091/query -H 'Content-Type: application/json' \\
-  -d '{"messages": [{"role": "user", "content": "Hello"}], "conversation_id": "test-123"}'
-    """)
+    logger.info(
+        "\nStarting SimpleAgent...\n"
+        "Usage: python simple_agent_app.py [--host HOST] [--port PORT]\n"
+        "Example: curl -X POST http://127.0.0.1:8091/query -H 'Content-Type: application/json' \\\n"
+        "  -d '{\"messages\": [{\"role\": \"user\", \"content\": \"Hello\"}], \"conversation_id\": \"test-123\"}'\n"
+    )
     app.run()

@@ -13,8 +13,9 @@ from .deployer import DockerDeployer
 
 from openjiuwen_runtime.foundation.log.utils import mask_userdata
 
-import logging
-logger = logging.getLogger(__name__)
+from openjiuwen_runtime.foundation.log import get_logger
+
+logger = get_logger(__name__)
 
 
 class DockerStrategy(BaseDeploymentStrategy[DockerInfo]):
@@ -72,7 +73,7 @@ class DockerStrategy(BaseDeploymentStrategy[DockerInfo]):
         env_vars = {}
         if userdata:
             env_vars["RUNTIME_USERDATA"] = userdata
-            logger.info(f"Using userdata: {mask_userdata(userdata)}")
+            logger.info("Using userdata: %s", mask_userdata(userdata))
 
         return DeployContext(
             common=CommonParams(
