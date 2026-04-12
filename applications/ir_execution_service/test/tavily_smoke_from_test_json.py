@@ -8,13 +8,14 @@ Smoke test: same Tavily params as applications/ir_execution_service/test/test.js
 from __future__ import annotations
 
 import json
-import logging
 import ssl
 import sys
 import urllib.error
 import urllib.request
 
-_LOG = logging.getLogger(__name__)
+from openjiuwen_runtime.foundation.log import get_logger
+
+_LOG = get_logger(__name__)
 
 # Copied from test.json → plugin_BCvUb.configs.tool
 URL = "https://api.tavily.com/search"
@@ -72,5 +73,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     sys.exit(main())

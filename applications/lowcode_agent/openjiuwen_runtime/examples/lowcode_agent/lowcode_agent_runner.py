@@ -74,9 +74,8 @@ _userdata_env_vars = _parse_userdata_env_vars()
 
 _WORKFLOW_TIMEOUT = os.getenv("WORKFLOW_EXECUTE_TIMEOUT", "300")
 os.environ.setdefault("WORKFLOW_EXECUTE_TIMEOUT", _WORKFLOW_TIMEOUT)
-# 流式首帧/帧间超时默认值不应与总超时一致（300s 会导致客户端超时后服务端长时间悬挂）
-os.environ.setdefault("WORKFLOW_STREAM_FRAME_TIMEOUT", "12")
-os.environ.setdefault("WORKFLOW_STREAM_FIRST_FRAME_TIMEOUT", "12")
+os.environ.setdefault("WORKFLOW_STREAM_FRAME_TIMEOUT", _WORKFLOW_TIMEOUT)
+os.environ.setdefault("WORKFLOW_STREAM_FIRST_FRAME_TIMEOUT", _WORKFLOW_TIMEOUT)
 
 _CODE_SANDBOX_URL = os.getenv("CODE_SANDBOX_URL", "")
 if not _CODE_SANDBOX_URL:
@@ -481,13 +480,15 @@ async def init():
 
     # 统计实际注册的工作流数量
     registered_workflow_count = len(workflow_providers) if workflow_providers else len(workflow_factories)
-    logger.info(f"Agent 加载成功! Type: {type(app.agent).__name__}")
-    logger.info(f"Agent Card: {result['agent_card'].name}")
-    logger.info(f"已注册 {registered_workflow_count} 个工作流, {len(plugin_tools)} 个插件")
-    print(f"[OK] Agent 加载成功! Type: {type(app.agent).__name__}")
-    print(f"[INFO] 使用配置文件: {file_path}")
-    print(f"[INFO] 用户数据: {mask_userdata(userdata)}")
-    print(f"[INFO] 已注册 {registered_workflow_count} 个工作流, {len(plugin_tools)} 个插件")
+    logger.info("Agent 加载成功! Type: %s", type(app.agent).__name__)
+    logger.info("Agent Card: %s", result["agent_card"].name)
+    logger.info(
+        "已注册 %s 个工作流, %s 个插件",
+        registered_workflow_count,
+        len(plugin_tools),
+    )
+    logger.info("使用配置文件: %s", file_path)
+    logger.info("用户数据: %s", mask_userdata(userdata))
 
 
 @app.agent_detail
@@ -683,7 +684,7 @@ async def shutdown():
     logger.info("开始关闭 Agent Runner...")
     if app.agent:
         logger.info("清理 Agent 资源...")
-        print("[OK] Agent 资源已清理")
+        logger.info("[OK] Agent 资源已清理")
     logger.info("=" * 60)
     logger.info("Lowcode Agent Runner 已关闭")
     logger.info("=" * 60)

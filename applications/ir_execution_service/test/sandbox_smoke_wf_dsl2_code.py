@@ -4,14 +4,15 @@
 """用 wf_dsl2.json 中 code_br6Gu 的同一段代码探测 CODE_SANDBOX_URL（与 RemoteCodeRunner 请求体一致）。"""
 from __future__ import annotations
 
-import logging
 import os
 import textwrap
 from pathlib import Path
 
 import requests
 
-_LOG = logging.getLogger(__name__)
+from openjiuwen_runtime.foundation.log import get_logger
+
+_LOG = get_logger(__name__)
 
 DEFAULT_PY_CODE = """
 class Args:
@@ -69,5 +70,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     main()

@@ -4,7 +4,7 @@
 from pathlib import Path
 from unittest import TestCase
 
-from openjiuwen_runtime.management.sdk.foundation.log import get_logger, setup_logging
+from openjiuwen_runtime.foundation.log import get_logger, setup_logging
 
 
 class TestLog(TestCase):

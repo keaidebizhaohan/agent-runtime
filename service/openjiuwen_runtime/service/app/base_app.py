@@ -18,6 +18,10 @@ from typing import Callable, Optional, Dict, Any
 from fastapi import FastAPI
 import uvicorn
 
+from openjiuwen_runtime.foundation.log import get_logger
+
+logger = get_logger(__name__)
+
 
 def _setup_runtime_env(kwargs: Dict[str, Any]) -> None:
     """
@@ -59,7 +63,7 @@ def _parse_cli_args() -> Dict[str, Any]:
     if args.irpath:
         file_path = str(Path(args.irpath).resolve())
         if not Path(args.irpath).exists():
-            print(f"[ERROR] 配置文件不存在: {file_path}")
+            logger.error("配置文件不存在: %s", file_path)
             sys.exit(1)
         result["file"] = file_path
 
@@ -182,5 +186,5 @@ class BaseApp:
 
         _setup_runtime_env(kwargs)
 
-        print(f"Starting {self.app_name} v{self.version} on http://{host}:{port}")
+        logger.info("Starting %s v%s on http://%s:%s", self.app_name, self.version, host, port)
         uvicorn.run(self.app, host=host, port=port, **kwargs)

@@ -10,8 +10,12 @@ It provides calculator tools: add (addition) and multiply (multiplication).
 Reference: OPENJIUWEN_RUNTIME_DESIGN_V2.md Section 3.3
 """
 
-from openjiuwen_runtime.service import PluginApp
 from typing import Dict, Any
+
+from openjiuwen_runtime.foundation.log import get_logger
+from openjiuwen_runtime.service import PluginApp
+
+logger = get_logger(__name__)
 
 # Create the PluginApp
 app = PluginApp(
@@ -116,26 +120,24 @@ async def divide(a: float, b: float) -> Dict[str, Any]:
 
 
 if __name__ == "__main__":
-    # Run the app
-    print("Starting CalculatorTools Plugin on http://127.0.0.1:8092")
-    print()
-    print("Available endpoints:")
-    print("  GET  /health              - 健康检查")
-    print("  GET  /tools               - 列出所有工具")
-    print("  POST /tools/add           - 加法工具")
-    print("  POST /tools/multiply      - 乘法工具")
-    print("  POST /tools/subtract      - 减法工具")
-    print("  POST /tools/divide        - 除法工具")
-    print()
-    print("Example usage:")
-    print('  curl -X POST http://127.0.0.1:8092/tools/add -H "Content-Type: application/json" -d \'{"a": 5, "b": 3}\'')
-    print(
-        '  curl -X POST http://127.0.0.1:8092/tools/multiply -H "Content-Type: application/json" -d \'{"a": 4, "b": 7}\'')
-    print(
-        '  curl -X POST http://127.0.0.1:8092/tools/subtract -H "Content-Type: application/json" -d \'{"a": 10, "b": 3}\'')
-    print(
-        '  curl -X POST http://127.0.0.1:8092/tools/divide -H "Content-Type: application/json" -d \'{"a": 20, "b": 4}\'')
-    print()
-    print("API documentation: http://127.0.0.1:8092/docs")
-    print()
+    logger.info(
+        "Starting CalculatorTools Plugin on http://127.0.0.1:8092\n\n"
+        "Available endpoints:\n"
+        "  GET  /health              - 健康检查\n"
+        "  GET  /tools               - 列出所有工具\n"
+        "  POST /tools/add           - 加法工具\n"
+        "  POST /tools/multiply      - 乘法工具\n"
+        "  POST /tools/subtract      - 减法工具\n"
+        "  POST /tools/divide        - 除法工具\n\n"
+        "Example usage:\n"
+        '  curl -X POST http://127.0.0.1:8092/tools/add -H "Content-Type: application/json" '
+        ' -d \'{"a": 5, "b": 3}\'\n'
+        '  curl -X POST http://127.0.0.1:8092/tools/multiply -H "Content-Type: application/json" '
+        ' -d \'{"a": 4, "b": 7}\'\n'
+        '  curl -X POST http://127.0.0.1:8092/tools/subtract -H "Content-Type: application/json" '
+        ' -d \'{"a": 10, "b": 3}\'\n'
+        '  curl -X POST http://127.0.0.1:8092/tools/divide -H "Content-Type: application/json" '
+        ' -d \'{"a": 20, "b": 4}\'\n\n'
+        "API documentation: http://127.0.0.1:8092/docs\n"
+    )
     app.run(host="127.0.0.1", port=8092)

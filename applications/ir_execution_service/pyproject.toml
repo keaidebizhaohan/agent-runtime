@@ -11,6 +11,7 @@ requires-python = ">=3.11.4"
 # openjiuwen：从 PyPI 安装（>=0.1.9）。
 # openjiuwen_studio：从 git 拉取 backend 子目录源码。
 dependencies = [
+    "openjiuwen-runtime-foundation",
     "openjiuwen[chromadb,obs]>=0.1.9",
     "openjiuwen_studio @ git+https://gitcode.com/openJiuwen/agent-studio.git@develop#subdirectory=backend",
     "openjiuwen-runtime-service",
@@ -23,6 +24,7 @@ dependencies = [
 ]
 
 [tool.uv.sources]
+openjiuwen-runtime-foundation = { path = "../../foundation", editable = true }
 openjiuwen-runtime-service = { path = "../../service", editable = true }
 
 [tool.uv]

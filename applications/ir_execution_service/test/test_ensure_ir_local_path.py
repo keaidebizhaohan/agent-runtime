@@ -17,7 +17,6 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 import os
 import sys
 import tempfile
@@ -25,7 +24,9 @@ from pathlib import Path
 
 from fastapi import HTTPException
 
-_LOG = logging.getLogger(__name__)
+from openjiuwen_runtime.foundation.log import get_logger
+
+_LOG = get_logger(__name__)
 
 _SERVICE_ROOT = Path(__file__).resolve().parent.parent
 if str(_SERVICE_ROOT) not in sys.path:
@@ -103,5 +104,4 @@ async def _main() -> None:
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     asyncio.run(_main())

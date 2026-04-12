@@ -6,8 +6,7 @@
 from abc import ABC, abstractmethod
 from typing import Any, Optional, Generic, TypeVar
 from datetime import datetime
-import logging
-
+from openjiuwen_runtime.foundation.log import get_logger
 from openjiuwen_runtime.foundation.db.handler import DBHandler
 from .models import DeployContext, DeployResult
 from .deployer import Deployer
@@ -16,7 +15,7 @@ from openjiuwen_runtime.foundation.db.table_def import TableDefinition
 from ...models.schemas import DEPLOYMENT_TABLE_NAME, DeploymentFields
 
 T = TypeVar("T")
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class DeploymentStrategy(ABC):
@@ -70,7 +69,7 @@ class BaseDeploymentStrategy(DeploymentStrategy, Generic[T]):
     def __init__(self, deployer: Optional[Deployer] = None):
         self._deployer = deployer or self._create_default_deployer()
         self._table_def = self._create_table_definition()
-        logger.debug(f"Strategy initialized: table={self._table_def.table_name}")
+        logger.debug("Strategy initialized: table=%s", self._table_def.table_name)
 
     @abstractmethod
     def _create_default_deployer(self) -> Deployer:
@@ -115,35 +114,47 @@ class BaseDeploymentStrategy(DeploymentStrategy, Generic[T]):
     async def create_record(
             self, db_handler: DBHandler, deployment_id: str, version: str, **kwargs: Any
     ) -> Any:
-        logger.debug(f"Creating record: deployment_id={deployment_id}, table={self._table_def.table_name}")
+        logger.debug(
+            "Creating record: deployment_id=%s, table=%s",
+            deployment_id,
+            self._table_def.table_name,
+        )
         data = self._build_record_data(deployment_id, version, **kwargs)
         result = await db_handler.create(self._table_def.table_name, data)
-        logger.debug(f"Record created: deployment_id={deployment_id}")
+        logger.debug("Record created: deployment_id=%s", deployment_id)
         return result
 
     async def get_record(
             self, db_handler: DBHandler, deployment_id: str
     ) -> Optional[Any]:
-        logger.debug(f"Getting record: deployment_id={deployment_id}, table={self._table_def.table_name}")
+        logger.debug(
+            "Getting record: deployment_id=%s, table=%s",
+            deployment_id,
+            self._table_def.table_name,
+        )
         return await db_handler.get(
             self._table_def.table_name, {DeploymentFields.DEPLOYMENT_ID: deployment_id}
         )
 
     async def delete_record(self, db_handler: DBHandler, deployment_id: str) -> bool:
-        logger.debug(f"Deleting record: deployment_id={deployment_id}, table={self._table_def.table_name}")
+        logger.debug(
+            "Deleting record: deployment_id=%s, table=%s",
+            deployment_id,
+            self._table_def.table_name,
+        )
         result = await db_handler.delete(
             self._table_def.table_name, {DeploymentFields.DEPLOYMENT_ID: deployment_id}
         )
         if result:
-            logger.debug(f"Record deleted: deployment_id={deployment_id}")
+            logger.debug("Record deleted: deployment_id=%s", deployment_id)
         return result
 
     async def deploy(self, deployment_id: str, db_handler: DBHandler) -> DeployResult:
-        logger.info(f"Starting deploy: deployment_id={deployment_id}")
+        logger.info("Starting deploy: deployment_id=%s", deployment_id)
 
         record = await self.get_record(db_handler, deployment_id)
         if not record:
-            logger.error(f"Record not found: deployment_id={deployment_id}")
+            logger.error("Record not found: deployment_id=%s", deployment_id)
             return DeployResult(
                 success=False, deployment_id=deployment_id, message=f"Record not found: {deployment_id}"
             )
@@ -153,12 +164,12 @@ class BaseDeploymentStrategy(DeploymentStrategy, Generic[T]):
             {DeploymentFields.DEPLOYMENT_ID: deployment_id}
         )
         if not deployment:
-            logger.error(f"Deployment not found: deployment_id={deployment_id}")
+            logger.error("Deployment not found: deployment_id=%s", deployment_id)
             return DeployResult(
                 success=False, deployment_id=deployment_id, message=f"Deployment not found: {deployment_id}"
             )
 
-        logger.debug(f"Updating status to PENDING: deployment_id={deployment_id}")
+        logger.debug("Updating status to PENDING: deployment_id=%s", deployment_id)
         await db_handler.update(
             DEPLOYMENT_TABLE_NAME,
             {DeploymentFields.DEPLOYMENT_ID: deployment_id},
@@ -166,7 +177,7 @@ class BaseDeploymentStrategy(DeploymentStrategy, Generic[T]):
         )
 
         ctx = self._build_deploy_context(record, deployment)
-        logger.debug(f"Calling deployer: deployment_id={deployment_id}")
+        logger.debug("Calling deployer: deployment_id=%s", deployment_id)
         result = await self._deployer.deploy(ctx)
 
         if result.success:
@@ -179,19 +190,23 @@ class BaseDeploymentStrategy(DeploymentStrategy, Generic[T]):
                 update_data,
             )
 
-            logger.info(f"Deploy completed: deployment_id={deployment_id}, url={result.url}")
+            logger.info("Deploy completed: deployment_id=%s, url=%s", deployment_id, result.url)
         else:
             await db_handler.update(
                 DEPLOYMENT_TABLE_NAME,
                 {DeploymentFields.DEPLOYMENT_ID: deployment_id},
                 {DeploymentFields.DEPLOYMENT_STATUS: DeploymentStatus.FAILED.value},
             )
-            logger.error(f"Deploy failed: deployment_id={deployment_id}, message={result.message}")
+            logger.error(
+                "Deploy failed: deployment_id=%s, message=%s",
+                deployment_id,
+                result.message,
+            )
 
         return result
 
     async def stop(self, deployment_id: str, db_handler: DBHandler) -> DeployResult:
-        logger.info(f"Stopping deployment: deployment_id={deployment_id}")
+        logger.info("Stopping deployment: deployment_id=%s", deployment_id)
 
         record = await self.get_record(db_handler, deployment_id)
         kwargs = {}
@@ -206,16 +221,20 @@ class BaseDeploymentStrategy(DeploymentStrategy, Generic[T]):
                 {DeploymentFields.DEPLOYMENT_ID: deployment_id},
                 {DeploymentFields.DEPLOYMENT_STATUS: DeploymentStatus.STOPPED.value},
             )
-            logger.info(f"Deployment stopped: deployment_id={deployment_id}")
+            logger.info("Deployment stopped: deployment_id=%s", deployment_id)
         else:
-            logger.error(f"Failed to stop deployment: deployment_id={deployment_id}, message={result.message}")
+            logger.error(
+                "Failed to stop deployment: deployment_id=%s, message=%s",
+                deployment_id,
+                result.message,
+            )
 
         return result
 
     async def get_status(
             self, deployment_id: str, db_handler: DBHandler
     ) -> DeploymentStatus:
-        logger.debug(f"Getting status: deployment_id={deployment_id}")
+        logger.debug("Getting status: deployment_id=%s", deployment_id)
 
         record = await self.get_record(db_handler, deployment_id)
         kwargs = {}
@@ -235,12 +254,12 @@ class BaseDeploymentStrategy(DeploymentStrategy, Generic[T]):
                     {DeploymentFields.DEPLOYMENT_ID: deployment_id},
                     {DeploymentFields.DEPLOYMENT_STATUS: DeploymentStatus.STOPPED.value},
                 )
-                logger.debug(f"Status updated to STOPPED: deployment_id={deployment_id}")
+                logger.debug("Status updated to STOPPED: deployment_id=%s", deployment_id)
 
         return status
 
     async def get_info(self, db_handler: DBHandler, deployment_id: str) -> Optional[T]:
-        logger.debug(f"Getting info: deployment_id={deployment_id}")
+        logger.debug("Getting info: deployment_id=%s", deployment_id)
         record = await self.get_record(db_handler, deployment_id)
         if not record:
             return None

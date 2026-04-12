@@ -10,10 +10,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sess
 from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy import select, update, delete
 
+from ..log import get_logger
 from .handler import DBHandler
 from .table_def import TableDefinition, ColumnDefinition
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class Base(DeclarativeBase):
@@ -71,7 +72,7 @@ class SQLAlchemyHandler(DBHandler):
 
     async def init_table(self, table_def: TableDefinition) -> None:
         """初始化表（存在则跳过，不存在则创建）"""
-        logger.debug(f"Initializing table: table_name={table_def.table_name}")
+        logger.debug("Initializing table: table_name=%s", table_def.table_name)
         columns = []
         for col_def in table_def.columns:
             sa_type = self._get_sqlalchemy_type(col_def.data_type, col_def.length)
@@ -110,16 +111,16 @@ class SQLAlchemyHandler(DBHandler):
                     sync_conn, tables=[table.__table__]
                 )
             )
-        logger.debug(f"Table initialized: table_name={table_def.table_name}")
+        logger.debug("Table initialized: table_name=%s", table_def.table_name)
 
     async def _get_session(self) -> AsyncSession:
         return self.session_factory()
 
     async def create(self, table_name: str, data: dict) -> Any:
-        logger.debug(f"Creating record: table={table_name}")
+        logger.debug("Creating record: table=%s", table_name)
         model = self._table_models.get(table_name)
         if not model:
-            logger.error(f"Table not initialized: table={table_name}")
+            logger.error("Table not initialized: table=%s", table_name)
             raise ValueError(f"Table {table_name} not initialized")
 
         async with await self._get_session() as session:
@@ -127,14 +128,14 @@ class SQLAlchemyHandler(DBHandler):
             session.add(record)
             await session.commit()
             await session.refresh(record)
-            logger.debug(f"Record created: table={table_name}")
+            logger.debug("Record created: table=%s", table_name)
             return record
 
     async def get(self, table_name: str, filters: dict) -> Optional[Any]:
-        logger.debug(f"Getting record: table={table_name}, filters={filters}")
+        logger.debug("Getting record: table=%s, filters=%s", table_name, filters)
         model = self._table_models.get(table_name)
         if not model:
-            logger.error(f"Table not initialized: table={table_name}")
+            logger.error("Table not initialized: table=%s", table_name)
             raise ValueError(f"Table {table_name} not initialized")
 
         async with await self._get_session() as session:
@@ -143,14 +144,14 @@ class SQLAlchemyHandler(DBHandler):
                 query = query.where(getattr(model, key) == value)
             result = await session.execute(query)
             record = result.scalar_one_or_none()
-            logger.debug(f"Record found: table={table_name}, found={record is not None}")
+            logger.debug("Record found: table=%s, found=%s", table_name, record is not None)
             return record
 
     async def update(self, table_name: str, filters: dict, data: dict) -> Optional[Any]:
-        logger.debug(f"Updating record: table={table_name}, filters={filters}")
+        logger.debug("Updating record: table=%s, filters=%s", table_name, filters)
         model = self._table_models.get(table_name)
         if not model:
-            logger.error(f"Table not initialized: table={table_name}")
+            logger.error("Table not initialized: table=%s", table_name)
             raise ValueError(f"Table {table_name} not initialized")
 
         async with await self._get_session() as session:
@@ -160,14 +161,14 @@ class SQLAlchemyHandler(DBHandler):
             query = query.values(**data)
             await session.execute(query)
             await session.commit()
-            logger.debug(f"Record updated: table={table_name}")
+            logger.debug("Record updated: table=%s", table_name)
             return await self.get(table_name, filters)
 
     async def delete(self, table_name: str, filters: dict) -> bool:
-        logger.debug(f"Deleting record: table={table_name}, filters={filters}")
+        logger.debug("Deleting record: table=%s, filters=%s", table_name, filters)
         model = self._table_models.get(table_name)
         if not model:
-            logger.error(f"Table not initialized: table={table_name}")
+            logger.error("Table not initialized: table=%s", table_name)
             raise ValueError(f"Table {table_name} not initialized")
 
         async with await self._get_session() as session:
@@ -177,7 +178,7 @@ class SQLAlchemyHandler(DBHandler):
             result = await session.execute(query)
             await session.commit()
             deleted = result.rowcount > 0
-            logger.debug(f"Record deleted: table={table_name}, deleted={deleted}")
+            logger.debug("Record deleted: table=%s, deleted=%s", table_name, deleted)
             return deleted
 
     async def list_records(
@@ -187,10 +188,16 @@ class SQLAlchemyHandler(DBHandler):
         limit: int = 100,
         offset: int = 0,
     ) -> list[Any]:
-        logger.debug(f"Listing records: table={table_name}, filters={filters}, limit={limit}, offset={offset}")
+        logger.debug(
+            "Listing records: table=%s, filters=%s, limit=%s, offset=%s",
+            table_name,
+            filters,
+            limit,
+            offset,
+        )
         model = self._table_models.get(table_name)
         if not model:
-            logger.error(f"Table not initialized: table={table_name}")
+            logger.error("Table not initialized: table=%s", table_name)
             raise ValueError(f"Table {table_name} not initialized")
 
         async with await self._get_session() as session:
@@ -201,5 +208,5 @@ class SQLAlchemyHandler(DBHandler):
             query = query.offset(offset).limit(limit)
             result = await session.execute(query)
             records = list(result.scalars().all())
-            logger.debug(f"Records listed: table={table_name}, count={len(records)}")
+            logger.debug("Records listed: table=%s, count=%s", table_name, len(records))
             return records

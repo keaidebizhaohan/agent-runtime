@@ -2,7 +2,6 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
 
 import asyncio
-import logging
 import uuid
 from datetime import datetime
 from enum import Enum
@@ -10,6 +9,7 @@ from typing import Any, Optional
 from urllib import request as urllib_request
 from urllib.parse import urljoin, urlparse, urlunparse
 
+from openjiuwen_runtime.foundation.log import get_logger
 from openjiuwen_runtime.foundation.db.handler import DBHandler
 from openjiuwen_runtime.foundation.db.table_def import TableDefinition, ColumnDefinition, IndexDefinition
 from .deployments import (
@@ -29,7 +29,7 @@ from .models.schemas import (
     DeploymentFields,
 )
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class DeployMode(str, Enum):
@@ -134,8 +134,14 @@ class DeploymentManager:
             **kwargs: Any,
     ) -> DeploymentInfo:
         """部署Agent"""
-        logger.info(f"Deploying agent: name={name}, version={version}, "
-                    f"mode={mode}, user_id={user_id}, space_id={space_id}")
+        logger.info(
+            "Deploying agent: name=%s, version=%s, mode=%s, user_id=%s, space_id=%s",
+            name,
+            version,
+            mode,
+            user_id,
+            space_id,
+        )
         kwargs["package_name"] = name
         return await self._deploy(
             deployment_type=DeploymentType.AGENT,
@@ -158,8 +164,14 @@ class DeploymentManager:
             **kwargs: Any,
     ) -> DeploymentInfo:
         """部署Plugin"""
-        logger.info(f"Deploying plugin: name={name}, version={version}, "
-                    f"mode={mode}, user_id={user_id}, space_id={space_id}")
+        logger.info(
+            "Deploying plugin: name=%s, version=%s, mode=%s, user_id=%s, space_id=%s",
+            name,
+            version,
+            mode,
+            user_id,
+            space_id,
+        )
         return await self._deploy(
             deployment_type=DeploymentType.PLUGIN,
             name=name,
@@ -182,8 +194,14 @@ class DeploymentManager:
     ) -> list[DeploymentInfo]:
         """列出部署"""
         logger.debug(
-            f"Listing deployments: type={deployment_type}, status={deployment_status}, "
-            f"user_id={user_id}, space_id={space_id}, limit={limit}, offset={offset}")
+            "Listing deployments: type=%s, status=%s, user_id=%s, space_id=%s, limit=%s, offset=%s",
+            deployment_type,
+            deployment_status,
+            user_id,
+            space_id,
+            limit,
+            offset,
+        )
         filters = {}
         if deployment_type:
             filters[DeploymentFields.DEPLOYMENT_TYPE] = deployment_type.value
@@ -198,18 +216,18 @@ class DeploymentManager:
             DEPLOYMENT_TABLE_NAME, filters=filters if filters else None, limit=limit, offset=offset
         )
         result = [DeploymentInfo.model_validate(r if hasattr(r, "to_dict") else r) for r in records]
-        logger.debug(f"Found {len(result)} deployments")
+        logger.debug("Found %s deployments", len(result))
         return result
 
     async def get_deployment(self, deployment_id: str) -> Optional[DeploymentInfo]:
         """获取部署详情"""
-        logger.debug(f"Getting deployment: deployment_id={deployment_id}")
+        logger.debug("Getting deployment: deployment_id=%s", deployment_id)
         record = await self.db_handler.get(
             DEPLOYMENT_TABLE_NAME, 
             {DeploymentFields.DEPLOYMENT_ID: deployment_id}
         )
         if not record:
-            logger.debug(f"Deployment not found: deployment_id={deployment_id}")
+            logger.debug("Deployment not found: deployment_id=%s", deployment_id)
             return None
         if hasattr(record, "to_dict"):
             return DeploymentInfo.model_validate(record.to_dict())
@@ -217,7 +235,7 @@ class DeploymentManager:
 
     async def get_deployment_status(self, deployment_id: str) -> Optional[DeploymentStatus]:
         """获取部署状态"""
-        logger.debug(f"Getting deployment status: deployment_id={deployment_id}")
+        logger.debug("Getting deployment status: deployment_id=%s", deployment_id)
         record = await self.db_handler.get(
             DEPLOYMENT_TABLE_NAME, 
             {DeploymentFields.DEPLOYMENT_ID: deployment_id}
@@ -232,26 +250,30 @@ class DeploymentManager:
             self, deployment_id: str, mode: Optional[DeployMode] = None
     ) -> bool:
         """停止部署"""
-        logger.info(f"Stopping deployment: deployment_id={deployment_id}")
+        logger.info("Stopping deployment: deployment_id=%s", deployment_id)
         if mode is None:
             mode = await self._detect_deploy_mode(deployment_id)
             if mode is None:
-                logger.warning(f"Cannot stop deployment, mode not found: deployment_id={deployment_id}")
+                logger.warning("Cannot stop deployment, mode not found: deployment_id=%s", deployment_id)
                 return False
 
         strategy = self._get_strategy(mode)
         result = await strategy.stop(deployment_id, self.db_handler)
         if result.success:
-            logger.info(f"Deployment stopped: deployment_id={deployment_id}")
+            logger.info("Deployment stopped: deployment_id=%s", deployment_id)
         else:
-            logger.error(f"Failed to stop deployment: deployment_id={deployment_id}, message={result.message}")
+            logger.error(
+                "Failed to stop deployment: deployment_id=%s, message=%s",
+                deployment_id,
+                result.message,
+            )
         return result.success
 
     async def delete_deployment(
             self, deployment_id: str, mode: Optional[DeployMode] = None
     ) -> bool:
         """删除部署"""
-        logger.info(f"Deleting deployment: deployment_id={deployment_id}")
+        logger.info("Deleting deployment: deployment_id=%s", deployment_id)
         if mode is None:
             mode = await self._detect_deploy_mode(deployment_id)
 
@@ -266,26 +288,26 @@ class DeploymentManager:
             {DeploymentFields.DEPLOYMENT_ID: deployment_id}
         )
         if result:
-            logger.info(f"Deployment deleted: deployment_id={deployment_id}")
+            logger.info("Deployment deleted: deployment_id=%s", deployment_id)
         else:
-            logger.error(f"Failed to delete deployment: deployment_id={deployment_id}")
+            logger.error("Failed to delete deployment: deployment_id=%s", deployment_id)
         return result
 
     async def get_process_info(self, deployment_id: str) -> Optional[ProcessInfo]:
         """获取进程部署详情"""
-        logger.debug(f"Getting process info: deployment_id={deployment_id}")
+        logger.debug("Getting process info: deployment_id=%s", deployment_id)
         strategy = self._get_strategy(DeployMode.SUBPROCESS)
         return await strategy.get_info(self.db_handler, deployment_id)
 
     async def get_docker_info(self, deployment_id: str) -> Optional[DockerInfo]:
         """获取Docker部署详情"""
-        logger.debug(f"Getting docker info: deployment_id={deployment_id}")
+        logger.debug("Getting docker info: deployment_id=%s", deployment_id)
         strategy = self._get_strategy(DeployMode.DOCKER)
         return await strategy.get_info(self.db_handler, deployment_id)
 
     async def get_k8s_info(self, deployment_id: str) -> Optional[K8sInfo]:
         """获取K8S部署详情"""
-        logger.debug(f"Getting k8s info: deployment_id={deployment_id}")
+        logger.debug("Getting k8s info: deployment_id=%s", deployment_id)
         strategy = self._get_strategy(DeployMode.K8S)
         return await strategy.get_info(self.db_handler, deployment_id)
 
@@ -295,13 +317,13 @@ class DeploymentManager:
 
     async def _detect_deploy_mode(self, deployment_id: str) -> Optional[DeployMode]:
         """检测部署模式"""
-        logger.debug(f"Detecting deploy mode for deployment_id={deployment_id}")
+        logger.debug("Detecting deploy mode for deployment_id=%s", deployment_id)
         for mode, strategy in self._strategies.items():
             record = await strategy.get_record(self.db_handler, deployment_id)
             if record:
-                logger.debug(f"Detected deploy mode: {mode} for deployment_id={deployment_id}")
+                logger.debug("Detected deploy mode: %s for deployment_id=%s", mode, deployment_id)
                 return mode
-        logger.debug(f"No deploy mode found for deployment_id={deployment_id}")
+        logger.debug("No deploy mode found for deployment_id=%s", deployment_id)
         return None
 
     async def _check_health_endpoint(self, base_url: str, timeout_seconds: float = 2.0) -> bool:
@@ -376,7 +398,7 @@ class DeploymentManager:
         deployment_id = kwargs.pop("deployment_id", None) or self._generate_deployment_id()
         now = datetime.utcnow()
 
-        logger.debug(f"deployment_id={deployment_id}, type={deployment_type}, name={name}")
+        logger.debug("deployment_id=%s, type=%s, name=%s", deployment_id, deployment_type, name)
 
         create_model = DeploymentCreate(
             deployment_id=deployment_id,
@@ -404,9 +426,9 @@ class DeploymentManager:
             await strategy.deploy(deployment_id, self.db_handler)
 
             await self._wait_until_deployment_ready(deployment_id)
-            logger.info(f"Deployment completed: deployment_id={deployment_id}, name={name}")
+            logger.info("Deployment completed: deployment_id=%s, name=%s", deployment_id, name)
         except Exception as e:
-            logger.error(f"Deployment failed: deployment_id={deployment_id}, error={str(e)}")
+            logger.error("Deployment failed: deployment_id=%s, error=%s", deployment_id, str(e))
             await self.db_handler.update(
                 DEPLOYMENT_TABLE_NAME,
                 {DeploymentFields.DEPLOYMENT_ID: deployment_id},

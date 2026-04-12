@@ -18,13 +18,14 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 import os
 import secrets
 import sys
 from pathlib import Path
 
-_LOG = logging.getLogger(__name__)
+from openjiuwen_runtime.foundation.log import get_logger
+
+_LOG = get_logger(__name__)
 
 # --- 从 .env 手工同步的配置（与 LOWCODE_IR_OBS_BUCKET、OBS_* 一致）---
 OBS_ACCESS_KEY_ID = ""
@@ -137,5 +138,4 @@ async def _main() -> None:
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     asyncio.run(_main())

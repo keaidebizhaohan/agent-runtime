@@ -7,8 +7,8 @@ Multi-Agent Group Example
 演示多个 AgentApp 共享一个 FastAPI 服务。
 """
 
-import sys
 import os
+import sys
 from pathlib import Path
 from typing import AsyncIterator, Tuple
 
@@ -16,7 +16,10 @@ from typing import AsyncIterator, Tuple
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
+from openjiuwen_runtime.foundation.log import get_logger
 from openjiuwen_runtime.service import AgentApp, AppGroup
+
+logger = get_logger(__name__)
 
 
 class MockAgent:
@@ -60,7 +63,7 @@ customer_app = AgentApp(
 @customer_app.init
 async def init_customer():
     customer_app.agent = MockAgent("客服")
-    print("[OK] 客服 Agent 初始化完成")
+    logger.info("[OK] 客服 Agent 初始化完成")
 
 
 @customer_app.query
@@ -83,7 +86,7 @@ assistant_app = AgentApp(
 @assistant_app.init
 async def init_assistant():
     assistant_app.agent = MockAgent("助手")
-    print("[OK] 助手 Agent 初始化完成")
+    logger.info("[OK] 助手 Agent 初始化完成")
 
 
 @assistant_app.query

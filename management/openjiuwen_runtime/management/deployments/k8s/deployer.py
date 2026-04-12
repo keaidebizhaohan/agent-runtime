@@ -4,7 +4,6 @@
 """K8s 部署器"""
 
 import asyncio
-import logging
 import os
 from typing import Optional
 
@@ -12,8 +11,9 @@ from ..base.deployer import Deployer
 from ..base.models import DeployContext, DeployResult
 from .models import K8sParams
 from ...models.enums import DeploymentStatus
+from openjiuwen_runtime.foundation.log import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class K8sDeployer(Deployer[K8sParams]):
@@ -29,7 +29,7 @@ class K8sDeployer(Deployer[K8sParams]):
         self.kubeconfig = kubeconfig
         self.namespace = namespace
         self._deployments: dict[str, str] = {}
-        logger.debug(f"K8sDeployer initialized: namespace={namespace}")
+        logger.debug("K8sDeployer initialized: namespace=%s", namespace)
 
     def _get_kubectl_env(self) -> dict:
         env = os.environ.copy()
@@ -41,7 +41,7 @@ class K8sDeployer(Deployer[K8sParams]):
         cmd = ["kubectl"]
         cmd.extend(args)
 
-        logger.debug(f"Running kubectl command: {' '.join(args)}")
+        logger.debug("Running kubectl command: %s", " ".join(args))
         process = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
@@ -55,7 +55,7 @@ class K8sDeployer(Deployer[K8sParams]):
         return False, stderr.decode().strip()
 
     async def deploy(self, ctx: DeployContext[K8sParams]) -> DeployResult:
-        logger.info(f"Deploying k8s: deployment_id={ctx.deployment_id}, host={ctx.host}")
+        logger.info("Deploying k8s: deployment_id=%s, host=%s", ctx.deployment_id, ctx.host)
         try:
             k8s_params = ctx.params or K8sParams()
             namespace = k8s_params.namespace or self.namespace
@@ -66,43 +66,59 @@ class K8sDeployer(Deployer[K8sParams]):
             host = ctx.host or self.default_host
 
             if config_map:
-                logger.debug(f"Creating config map: namespace={namespace}")
+                logger.debug("Creating config map: namespace=%s", namespace)
                 cm_manifest = self._build_config_map_manifest(deployment_name, namespace, config_map)
                 success, output = await self._run_kubectl_command("apply", "-f", "-", "--namespace", namespace)
                 if not success:
-                    logger.error(f"ConfigMap creation failed: deployment_id={ctx.deployment_id}, error={output}")
+                    logger.error(
+                        "ConfigMap creation failed: deployment_id=%s, error=%s",
+                        ctx.deployment_id,
+                        output,
+                    )
 
             if secret:
-                logger.debug(f"Creating secret: namespace={namespace}")
+                logger.debug("Creating secret: namespace=%s", namespace)
                 secret_manifest = self._build_secret_manifest(deployment_name, namespace, secret)
                 success, output = await self._run_kubectl_command("apply", "-f", "-", "--namespace", namespace)
                 if not success:
-                    logger.error(f"Secret creation failed: deployment_id={ctx.deployment_id}, error={output}")
+                    logger.error(
+                        "Secret creation failed: deployment_id=%s, error=%s",
+                        ctx.deployment_id,
+                        output,
+                    )
 
             deployment_manifest = self._build_deployment_manifest(
                 deployment_name, namespace, replicas, ctx.deployment_id
             )
 
-            logger.debug(f"Creating deployment: deployment_name={deployment_name}")
+            logger.debug("Creating deployment: deployment_name=%s", deployment_name)
             success, output = await self._run_kubectl_command(
                 "apply", "-f", "-", "--namespace", namespace
             )
 
             if not success:
-                logger.error(f"kubectl apply failed: deployment_id={ctx.deployment_id}, error={output}")
+                logger.error(
+                    "kubectl apply failed: deployment_id=%s, error=%s",
+                    ctx.deployment_id,
+                    output,
+                )
                 return DeployResult(
                     success=False, message=f"kubectl apply failed: {output}"
                 )
 
             self._deployments[ctx.deployment_id] = deployment_name
 
-            logger.debug(f"Waiting for rollout: deployment_name={deployment_name}")
+            logger.debug("Waiting for rollout: deployment_name=%s", deployment_name)
             success, output = await self._run_kubectl_command(
                 "rollout", "status", f"deployment/{deployment_name}", "-n", namespace
             )
 
             if not success:
-                logger.error(f"Deployment rollout failed: deployment_id={ctx.deployment_id}, error={output}")
+                logger.error(
+                    "Deployment rollout failed: deployment_id=%s, error=%s",
+                    ctx.deployment_id,
+                    output,
+                )
                 return DeployResult(
                     success=False, message=f"Deployment rollout failed: {output}"
                 )
@@ -110,7 +126,11 @@ class K8sDeployer(Deployer[K8sParams]):
             url = f"http://{host}"
 
             logger.info(
-                f"K8s deployed: deployment_id={ctx.deployment_id}, deployment_name={deployment_name}, url={url}")
+                "K8s deployed: deployment_id=%s, deployment_name=%s, url=%s",
+                ctx.deployment_id,
+                deployment_name,
+                url,
+            )
             return DeployResult(
                 success=True,
                 message="K8s deployment started successfully",
@@ -118,7 +138,7 @@ class K8sDeployer(Deployer[K8sParams]):
             )
 
         except Exception as e:
-            logger.error(f"K8s deploy failed: deployment_id={ctx.deployment_id}, error={str(e)}")
+            logger.error("K8s deploy failed: deployment_id=%s, error=%s", ctx.deployment_id, str(e))
             return DeployResult(success=False, message=f"Deployment failed: {str(e)}")
 
     def _build_deployment_manifest(self, name: str, namespace: str, replicas: int, deployment_id: str) -> str:
@@ -173,17 +193,21 @@ data:
 """
 
     async def stop(self, deployment_id: str, **kwargs) -> DeployResult:
-        logger.info(f"Stopping k8s: deployment_id={deployment_id}")
+        logger.info("Stopping k8s: deployment_id=%s", deployment_id)
         try:
             deployment_name = f"deploy-{deployment_id}"
 
-            logger.debug(f"Deleting deployment: deployment_name={deployment_name}")
+            logger.debug("Deleting deployment: deployment_name=%s", deployment_name)
             success, output = await self._run_kubectl_command(
                 "delete", "deployment", deployment_name, "-n", self.namespace
             )
 
             if not success:
-                logger.error(f"kubectl delete failed: deployment_id={deployment_id}, error={output}")
+                logger.error(
+                    "kubectl delete failed: deployment_id=%s, error=%s",
+                    deployment_id,
+                    output,
+                )
                 return DeployResult(
                     success=False, message=f"kubectl delete failed: {output}"
                 )
@@ -191,17 +215,17 @@ data:
             if deployment_id in self._deployments:
                 del self._deployments[deployment_id]
 
-            logger.info(f"K8s stopped: deployment_id={deployment_id}")
+            logger.info("K8s stopped: deployment_id=%s", deployment_id)
             return DeployResult(
                 success=True, message="K8s deployment stopped successfully"
             )
 
         except Exception as e:
-            logger.error(f"K8s stop failed: deployment_id={deployment_id}, error={str(e)}")
+            logger.error("K8s stop failed: deployment_id=%s, error=%s", deployment_id, str(e))
             return DeployResult(success=False, message=f"Stop failed: {str(e)}")
 
     async def get_status(self, deployment_id: str, **kwargs) -> DeploymentStatus:
-        logger.debug(f"Getting k8s status: deployment_id={deployment_id}")
+        logger.debug("Getting k8s status: deployment_id=%s", deployment_id)
         deployment_name = f"deploy-{deployment_id}"
 
         success, output = await self._run_kubectl_command(
