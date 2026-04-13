@@ -13,7 +13,7 @@ Reference: OPENJIUWEN_RUNTIME_DESIGN_V2.md Section 3.3
 from typing import Dict, Any
 
 from openjiuwen_runtime.foundation.log import get_logger
-from openjiuwen_runtime.service import PluginApp
+from service.openjiuwen_runtime.service import PluginApp
 
 logger = get_logger(__name__)
 
@@ -121,7 +121,7 @@ async def divide(a: float, b: float) -> Dict[str, Any]:
 
 if __name__ == "__main__":
     logger.info(
-        "Starting CalculatorTools Plugin on http://127.0.0.1:8092\n\n"
+        "Starting CalculatorTools Plugin on http://127.0.0.1:8090\n\n"
         "Available endpoints:\n"
         "  GET  /health              - 健康检查\n"
         "  GET  /tools               - 列出所有工具\n"
@@ -130,14 +130,14 @@ if __name__ == "__main__":
         "  POST /tools/subtract      - 减法工具\n"
         "  POST /tools/divide        - 除法工具\n\n"
         "Example usage:\n"
-        '  curl -X POST http://127.0.0.1:8092/tools/add -H "Content-Type: application/json" '
+        '  curl -X POST http://127.0.0.1:8090/tools/add -H "Content-Type: application/json" '
         ' -d \'{"a": 5, "b": 3}\'\n'
-        '  curl -X POST http://127.0.0.1:8092/tools/multiply -H "Content-Type: application/json" '
+        '  curl -X POST http://127.0.0.1:8090/tools/multiply -H "Content-Type: application/json" '
         ' -d \'{"a": 4, "b": 7}\'\n'
-        '  curl -X POST http://127.0.0.1:8092/tools/subtract -H "Content-Type: application/json" '
+        '  curl -X POST http://127.0.0.1:8090/tools/subtract -H "Content-Type: application/json" '
         ' -d \'{"a": 10, "b": 3}\'\n'
-        '  curl -X POST http://127.0.0.1:8092/tools/divide -H "Content-Type: application/json" '
+        '  curl -X POST http://127.0.0.1:8090/tools/divide -H "Content-Type: application/json" '
         ' -d \'{"a": 20, "b": 4}\'\n\n'
-        "API documentation: http://127.0.0.1:8092/docs\n"
+        "API documentation: http://127.0.0.1:8090/docs\n"
     )
-    app.run(host="127.0.0.1", port=8092)
+    app.run()
