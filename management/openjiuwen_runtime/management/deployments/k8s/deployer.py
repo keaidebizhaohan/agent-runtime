@@ -13,7 +13,6 @@ from ..base.deployer import Deployer
 from ..base.models import DeployContext, DeployResult
 from .models import K8sParams
 from ...models.enums import DeploymentStatus
-from openjiuwen_runtime.foundation.log import get_logger
 
 logger = get_logger(__name__)
 
