@@ -3,18 +3,15 @@ SERVER_DIR=${PROJECT_DIR}/server
 ENV_FILE=${SERVER_DIR}/.env
 
 
-# ==============================================
-# ✅ 跨平台路径解析：Windows + Linux 都正确
-# ==============================================
 function is_absolute_path {
     local path="$1"
     if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" || "$OS" == "Windows_NT" ]]; then
-        # Windows 绝对路径 C:\xxx D:\xxx /c/xxx /d/xxx
+        # Windows absolute paths: C:\xxx D:\xxx /c/xxx /d/xxx
         if [[ "$path" =~ ^[A-Za-z]:\\ || "$path" =~ ^/[A-Za-z]/ ]]; then
             return 0
         fi
     else
-        # Linux/macOS 绝对路径 /xxx
+        # Linux/macOS absolute paths: /xxx
         if [[ "$path" == /* ]]; then
             return 0
         fi
@@ -36,9 +33,9 @@ if [ ! -f "${ENV_FILE}" ]; then
 fi
 
 echo "Loading environment variables from ${ENV_FILE}"
-set -a                  # 开启：自动导出环境变量
-source ${ENV_FILE}      # 读取环境变量
-set +a                  # 关闭：恢复正常
+set -a                  # Automatically export all variables
+source ${ENV_FILE}      # Load environment variables from file
+set +a                  # Disable automatic export
 
 if [[ "$OSTYPE" == "darwin"* ]]; then
     SED_I_FLAG="-i ''"
@@ -52,15 +49,15 @@ sed ${SED_I_FLAG} '/openjiuwen-runtime-foundation/d' ${PROJECT_DIR}/management/p
 sed ${SED_I_FLAG} '/openjiuwen-runtime-management/d' ${PROJECT_DIR}/server/pyproject.toml
 
 
-# 自动解析 DIST_DIR：相对路径 = 基于 PROJECT_DIR；绝对路径 = 保持不变
-
+# Auto-resolve DIST_DIR:
+# Relative path = based on PROJECT_DIR; Absolute path = keep unchanged
 if is_absolute_path "${DIST_DIR}"; then
     FINAL_DIST_DIR="${DIST_DIR}"
 else
     FINAL_DIST_DIR="${PROJECT_DIR}/${DIST_DIR}"
 fi
 
-echo "✅ 最终构建输出目录（已解析绝对路径）: ${FINAL_DIST_DIR}"
+echo "✅ Final build output directory (absolute path resolved): ${FINAL_DIST_DIR}"
 rm -rf ${FINAL_DIST_DIR}
 mkdir ${FINAL_DIST_DIR}
 
@@ -90,15 +87,21 @@ uv sync ${UV_EXTRA_ARGS}
 rm -rf dist
 uv build --out-dir ${FINAL_DIST_DIR} ${UV_EXTRA_ARGS}
 
+# complie dist/openjiuwen_runtime_foundation-0.1.0-py3-none-any.whl
+cd ${PROJECT_DIR}/foundation
+uv sync ${UV_EXTRA_ARGS}
+rm -rf dist
+uv build --out-dir ${FINAL_DIST_DIR} ${UV_EXTRA_ARGS}
+
 # Before run this, please prepare ${PROJECT_DIR}/server/.env
 cd ${PROJECT_DIR}/server
 uv sync ${UV_EXTRA_ARGS}
 
 if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" || "$OS" == "Windows_NT" ]]; then
-    # Windows 系统 (Git Bash / WSL / Cygwin)
+    # Windows (Git Bash / WSL / Cygwin)
     source .venv/Scripts/activate
 else
-    # Linux / macOS 系统
+    # Linux / macOS 
     source .venv/bin/activate
 fi
 uv pip install -e ../management ${UV_EXTRA_ARGS}
