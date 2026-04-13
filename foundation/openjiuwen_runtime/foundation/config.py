@@ -84,13 +84,22 @@ class Settings(BaseSettings):
         self.deploy_path = Path(self.DEPLOY_DIR)
         if not self.deploy_path.is_absolute():
             self.deploy_path = PROJECT_ROOT / self.deploy_path
-        self.DEPLOY_DIR = str(self.deploy_path.resolve())
+        # 与 .env 中 DEPLOY_DIR 键名一致，保持大写属性名（Pydantic 字段）
+        object.__setattr__(
+            self,
+            "DEPLOY_DIR",
+            str(self.deploy_path.resolve()),
+        )
 
         # 处理 DIST_DIR
         self.dist_path = Path(self.DIST_DIR)
         if not self.dist_path.is_absolute():
             self.dist_path = PROJECT_ROOT / self.dist_path
-        self.DIST_DIR = str(self.dist_path.resolve())
+        object.__setattr__(
+            self,
+            "DIST_DIR",
+            str(self.dist_path.resolve()),
+        )
 
         # 自动创建目录（可选，非常实用）
         self.deploy_path.mkdir(parents=True, exist_ok=True)

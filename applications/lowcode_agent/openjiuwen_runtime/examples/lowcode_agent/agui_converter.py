@@ -23,14 +23,22 @@ from typing import Any, Dict, List, Optional
 
 
 _AGUI_TEXT_DELTA_FLUSH_CHARS = max(1, int(os.environ.get("AGUI_TEXT_DELTA_FLUSH_CHARS", "24")))
-_AGUI_TEXT_DELTA_FLUSH_ON_TAIL = tuple(
-    marker.strip()
-    for marker in os.environ.get(
+
+
+def _agui_flush_tail_markers() -> tuple[str, ...]:
+    raw = os.environ.get(
         "AGUI_TEXT_DELTA_FLUSH_ON_TAIL",
         ".,,,，,。,！,？,!,?,；,;,\n",
-    ).split(",")
-    if marker.strip()
-)
+    )
+    out: list[str] = []
+    for marker in raw.split(","):
+        m = marker.strip()
+        if m:
+            out.append(m)
+    return tuple(out)
+
+
+_AGUI_TEXT_DELTA_FLUSH_ON_TAIL = _agui_flush_tail_markers()
 
 
 @dataclass

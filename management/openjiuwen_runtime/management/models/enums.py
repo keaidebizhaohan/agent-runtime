@@ -18,3 +18,10 @@ class DeploymentStatus(str, Enum):
     RUNNING = "running"
     STOPPED = "stopped"
     FAILED = "failed"
+
+
+class DeployMode(str, Enum):
+    """部署模式"""
+    SUBPROCESS = "subprocess"
+    DOCKER = "docker"
+    K8S = "k8s"

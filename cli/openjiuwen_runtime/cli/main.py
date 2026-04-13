@@ -8,13 +8,17 @@
 
 import asyncio
 import json
-import sys
 from pathlib import Path
 
 import click
 from dotenv import load_dotenv
 
-from openjiuwen_runtime.management.manager import DeploymentManager
+from openjiuwen_runtime.management import (
+    DeployAgentParams,
+    DeployPluginParams,
+    DeploymentManager,
+    ListDeploymentsParams,
+)
 from openjiuwen_runtime.management.models.enums import DeploymentType, DeploymentStatus
 from openjiuwen_runtime.foundation.db.sqlite_handler import SQLiteHandler
 
@@ -76,27 +80,30 @@ def deploy(ctx, python_file_path, name, port):
 
     async def _deploy():
         result = await manager.deploy_agent(
-            name=name,
-            version="1.0.0",
-            python_file_path=python_file_path,
-            port=port,
+            DeployAgentParams(
+                name=name,
+                version="1.0.0",
+                extras={"python_file_path": python_file_path, "port": port},
+            )
         )
         click.echo(json.dumps(result, indent=2, ensure_ascii=False))
 
     asyncio.run(_deploy())
 
 
-@agent.command()
+@agent.command(name="list")
 @click.option("--status", type=click.Choice(["pending", "running", "stopped", "failed"]), help="过滤状态")
 @click.pass_context
-def list(ctx, status):
+def list_deployments(ctx, status):
     """查询 Agent 列表"""
     manager = ctx.obj["manager"]
 
     async def _list():
         deployments = await manager.list_deployments(
-            deployment_type=DeploymentType.AGENT,
-            deployment_status=DeploymentStatus(status) if status else None,
+            ListDeploymentsParams(
+                deployment_type=DeploymentType.AGENT,
+                deployment_status=DeploymentStatus(status) if status else None,
+            )
         )
 
         if not deployments:
@@ -107,11 +114,15 @@ def list(ctx, status):
         click.echo(f"{'ID':<30} {'Name':<20} {'Status':<10} {'Port':<6} {'Package':<20} {'URL'}")
         click.echo("-" * 120)
         for dep in deployments:
-            name = dep.get('name') or '-'
-            dep_status = dep['status'].value if hasattr(dep['status'], 'value') else str(dep['status'])
-            package_name = dep.get('package_name') or '-'
-            url = dep.get('url') or '-'
-            click.echo(f"{dep['deployment_id']:<30} {name:<20} {dep_status:<10} {dep['port']:<6} {package_name:<20} {url:<30}")
+            name = dep.get("name") or "-"
+            dep_status = dep["status"].value if hasattr(dep["status"], "value") else str(dep["status"])
+            package_name = dep.get("package_name") or "-"
+            url = dep.get("url") or "-"
+            row = (
+                f"{dep['deployment_id']:<30} {name:<20} {dep_status:<10} "
+                f"{dep['port']:<6} {package_name:<20} {url:<30}"
+            )
+            click.echo(row)
 
     asyncio.run(_list())
 
@@ -129,7 +140,7 @@ def get(ctx, deployment_id):
             click.echo(json.dumps(deployment, indent=2, ensure_ascii=False))
         else:
             click.echo(f"Deployment {deployment_id} not found", err=True)
-            sys.exit(1)
+            raise click.Abort()
 
     asyncio.run(_get())
 
@@ -147,7 +158,7 @@ def delete(ctx, deployment_id):
             click.echo(f"Deployment {deployment_id} deleted")
         else:
             click.echo(f"Deployment {deployment_id} not found", err=True)
-            sys.exit(1)
+            raise click.Abort()
 
     asyncio.run(_delete())
 
@@ -180,27 +191,30 @@ def deploy(ctx, python_file_path, name, port):
 
     async def _deploy():
         result = await manager.deploy_plugin(
-            name=name,
-            version="1.0.0",
-            python_file_path=python_file_path,
-            port=port,
+            DeployPluginParams(
+                name=name,
+                version="1.0.0",
+                extras={"python_file_path": python_file_path, "port": port},
+            )
         )
         click.echo(json.dumps(result, indent=2, ensure_ascii=False))
 
     asyncio.run(_deploy())
 
 
-@plugin.command()
+@plugin.command(name="list")
 @click.option("--status", type=click.Choice(["pending", "running", "stopped", "failed"]), help="过滤状态")
 @click.pass_context
-def list(ctx, status):
+def list_plugin_deployments(ctx, status):
     """查询 Plugin 列表"""
     manager = ctx.obj["manager"]
 
     async def _list():
         deployments = await manager.list_deployments(
-            deployment_type=DeploymentType.PLUGIN,
-            deployment_status=DeploymentStatus(status) if status else None,
+            ListDeploymentsParams(
+                deployment_type=DeploymentType.PLUGIN,
+                deployment_status=DeploymentStatus(status) if status else None,
+            )
         )
 
         if not deployments:
@@ -211,11 +225,15 @@ def list(ctx, status):
         click.echo(f"{'ID':<30} {'Name':<20} {'Status':<10} {'Port':<6} {'Package':<20} {'URL'}")
         click.echo("-" * 120)
         for dep in deployments:
-            name = dep.get('name') or '-'
-            dep_status = dep['status'].value if hasattr(dep['status'], 'value') else str(dep['status'])
-            package_name = dep.get('package_name') or '-'
-            url = dep.get('url') or '-'
-            click.echo(f"{dep['deployment_id']:<30} {name:<20} {dep_status:<10} {dep['port']:<6} {package_name:<20} {url:<30}")
+            name = dep.get("name") or "-"
+            dep_status = dep["status"].value if hasattr(dep["status"], "value") else str(dep["status"])
+            package_name = dep.get("package_name") or "-"
+            url = dep.get("url") or "-"
+            row = (
+                f"{dep['deployment_id']:<30} {name:<20} {dep_status:<10} "
+                f"{dep['port']:<6} {package_name:<20} {url:<30}"
+            )
+            click.echo(row)
 
     asyncio.run(_list())
 
@@ -233,7 +251,7 @@ def get(ctx, deployment_id):
             click.echo(json.dumps(deployment, indent=2, ensure_ascii=False))
         else:
             click.echo(f"Deployment {deployment_id} not found", err=True)
-            sys.exit(1)
+            raise click.Abort()
 
     asyncio.run(_get())
 
@@ -251,7 +269,7 @@ def delete(ctx, deployment_id):
             click.echo(f"Deployment {deployment_id} deleted")
         else:
             click.echo(f"Deployment {deployment_id} not found", err=True)
-            sys.exit(1)
+            raise click.Abort()
 
     asyncio.run(_delete())
 

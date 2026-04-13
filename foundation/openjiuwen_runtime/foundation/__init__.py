@@ -10,6 +10,8 @@ from .packaging import (
     uninstall_package,
 )
 from .docker_utils import (
+    DockerImageBuildParams,
+    DockerfileGenerateParams,
     build_docker_image,
     push_docker_image,
     tag_docker_image,
@@ -25,6 +27,8 @@ __all__ = [
     "get_python_path",
     "install_package",
     "uninstall_package",
+    "DockerImageBuildParams",
+    "DockerfileGenerateParams",
     "build_docker_image",
     "push_docker_image",
     "tag_docker_image",

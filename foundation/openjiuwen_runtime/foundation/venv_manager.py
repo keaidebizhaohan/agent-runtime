@@ -31,7 +31,8 @@ class VirtualEnvironmentManager:
 
     负责为每个部署创建、管理和清理独立的虚拟环境。
     """
-    def get_venv_path(self, deployment_id: str) -> Path:
+    @staticmethod
+    def get_venv_path(deployment_id: str) -> Path:
         """
         根据部署ID获取虚拟环境路径
 
@@ -122,7 +123,7 @@ class VirtualEnvironmentManager:
             return venv_path
         except subprocess.CalledProcessError as e:
             logger.error("Failed to create virtual environment: %s", e.stderr)
-            raise RuntimeError(f"Failed to create venv: {e}")
+            raise RuntimeError(f"Failed to create venv: {e}") from e
 
     def get_python_executable(self, deployment_id: str) -> Path:
         """
@@ -220,14 +221,16 @@ class VirtualEnvironmentManager:
                         return True
 
                 logger.error("WHL package not found in installed list: %s", whl_path)
-                raise RuntimeError(f"Failed to install WHL package: package not in pip list")
+                raise RuntimeError(
+                    "Failed to install WHL package: package not in pip list"
+                ) from None
             else:
                 logger.error("Failed to verify installation: %s", result.stderr)
-                raise RuntimeError(f"Failed to verify WHL installation")
+                raise RuntimeError("Failed to verify WHL installation") from None
 
         except Exception as e:
             logger.error("Failed to install WHL: %s", e)
-            raise RuntimeError(f"Failed to install WHL package: {e}")
+            raise RuntimeError(f"Failed to install WHL package: {e}") from e
 
     def delete_venv(self, deployment_id: str) -> bool:
         """

@@ -6,7 +6,10 @@
 用于模拟 OSS 文件上传功能
 """
 
+import logging
 from typing import Optional
+
+_LOG = logging.getLogger(__name__)
 
 
 class MockOSSClient:
@@ -38,7 +41,7 @@ class MockOSSClient:
         """
         # Mock: 假设文件已上传成功，返回一个 mock URL
         mock_oss_url = f"mock://oss.example.com/{object_key}"
-        print(f"[Mock OSS] Uploaded {local_file_path} -> {mock_oss_url}")
+        _LOG.info("[Mock OSS] Uploaded %s -> %s", local_file_path, mock_oss_url)
         return mock_oss_url
 
     async def delete_file(self, object_key: str) -> bool:
@@ -51,5 +54,5 @@ class MockOSSClient:
         Returns:
             是否成功删除
         """
-        print(f"[Mock OSS] Deleted {object_key}")
+        _LOG.info("[Mock OSS] Deleted %s", object_key)
         return True

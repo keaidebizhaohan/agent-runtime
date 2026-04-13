@@ -3,14 +3,15 @@
 
 """数据模型"""
 
-from .enums import DeploymentType, DeploymentStatus
+from openjiuwen_runtime.foundation.db.table_def import ColumnDefinition, IndexDefinition, TableDefinition
+
+from .enums import DeploymentStatus, DeploymentType
 from .schemas import (
-    DeploymentInfo, 
-    DeploymentCreate,
     DEPLOYMENT_TABLE_NAME,
+    DeploymentCreate,
     DeploymentFields,
+    DeploymentInfo,
 )
-from openjiuwen_runtime.foundation.db.table_def import TableDefinition, ColumnDefinition, IndexDefinition
 
 __all__ = [
     "DeploymentType", 

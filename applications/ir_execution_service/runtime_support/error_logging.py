@@ -47,4 +47,3 @@ def setup_error_file_logging() -> Path:
             lg.setLevel(logging.ERROR)
 
     return log_path
-

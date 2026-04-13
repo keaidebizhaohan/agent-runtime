@@ -68,6 +68,11 @@ class PluginApp(BaseApp):
         # 注册 Plugin 特定路由
         self._register_plugin_routes()
 
+    @property
+    def tools_count(self) -> int:
+        """已注册工具数量（供健康检查等场景使用）。"""
+        return len(self._tools)
+
     def register_tool(
         self,
         name: str,
@@ -153,7 +158,7 @@ class PluginApp(BaseApp):
                 raise HTTPException(
                     status_code=500,
                     detail=f"Tool execution failed: {str(e)}",
-                )
+                ) from e
 
     def _get_python_type(self, param_type: str) -> type:
         """

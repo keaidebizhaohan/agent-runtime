@@ -8,9 +8,11 @@ FastAPI 服务器，提供 Agent 部署管理 REST API（支持租户隔离）
 
 import uuid
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Annotated
 
-from fastapi import FastAPI, HTTPException, Query, Request, UploadFile, status
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, UploadFile, status
 from fastapi.responses import JSONResponse
 
 from openjiuwen_runtime.foundation.log import get_logger
@@ -18,8 +20,16 @@ from openjiuwen_runtime.foundation.config import settings
 from openjiuwen_runtime.foundation.db.mysql_handler import MySQLHandler
 from openjiuwen_runtime.foundation.db.sqlite_handler import SQLiteHandler
 from openjiuwen_runtime.foundation.port_utils import allocate_port, is_port_available
-from openjiuwen_runtime.management.manager import DeploymentManager, DeployMode
-from openjiuwen_runtime.management.models.enums import DeploymentType, DeploymentStatus
+from openjiuwen_runtime.management.manager import DeploymentManager
+from openjiuwen_runtime.management.models.deployment_params import (
+    DeployAgentParams,
+    ListDeploymentsParams,
+)
+from openjiuwen_runtime.management.models.enums import (
+    DeployMode,
+    DeploymentStatus,
+    DeploymentType,
+)
 
 from .middleware.tenant import TenantContextMiddleware, get_tenant_context
 from .utils import mask_userdata
@@ -125,16 +135,32 @@ def get_deploy_type(mode: str) -> str:
         return mode
 
 
+@dataclass
+class AgentDeployQuery:
+    """Agent 部署请求中的查询参数（用于收敛 FastAPI 路由形参个数）。"""
+
+    name: str
+    mode: str
+    port: int | None
+    userdata: str | None
+
+
+def _parse_agent_deploy_query(
+    name: str = Query(..., description="部署名称（=包名）"),
+    mode: str = Query(default="subprocess", description="部署器类型"),
+    port: int | None = Query(default=None, description="服务端口，不填则自动分配"),
+    userdata: str | None = Query(default=None, description="用户自定义数据"),
+) -> AgentDeployQuery:
+    return AgentDeployQuery(name=name, mode=mode, port=port, userdata=userdata)
+
+
 # ==================== Agent API ====================
 
 @app.post("/api/v1/agents/deploy")
 async def deploy_agent(
     request: Request,
     file: UploadFile,
-    name: str = Query(..., description="部署名称（=包名）"),
-    mode: str = Query(default="subprocess", description="部署器类型"),
-    port: int | None = Query(default=None, description="服务端口，不填则自动分配"),
-    userdata: str | None = Query(default=None, description="用户自定义数据"),
+    deploy_query: Annotated[AgentDeployQuery, Depends(_parse_agent_deploy_query)],
 ):
     """
     部署 Agent（JSON 配置，低码方式）
@@ -147,8 +173,10 @@ async def deploy_agent(
     try:
         # 获取租户上下文
         user_id, space_id = get_tenant_context(request)
-        logger.info(f"Received agent deploy request: user_id={user_id}, "
-                    f"space_id={space_id}, name={name}, userdata={mask_userdata(userdata)}")
+        logger.info(
+            f"Received agent deploy request: user_id={user_id}, "
+            f"space_id={space_id}, name={deploy_query.name}, userdata={mask_userdata(deploy_query.userdata)}"
+        )
 
         deployment_id = str(uuid.uuid4())
         logger.info(f"Generated deployment_id: {deployment_id}")
@@ -160,21 +188,27 @@ async def deploy_agent(
         content = await file.read()
         json_file_path.write_bytes(content)
 
-        deploy_type = get_deploy_type(mode)
-        port, whl_path = prepare_subprocess_deployment(deploy_type, port)
+        deploy_type = get_deploy_type(deploy_query.mode)
+        port, whl_path = prepare_subprocess_deployment(deploy_type, deploy_query.port)
 
         # 调用 Manager SDK 部署（传入 ir_path、whl_path 和 userdata）
         result = await manager.deploy_agent(
-            name=name,
-            version="1.0.0",
-            user_id=user_id,  # 注入租户信息
-            space_id=space_id,  # 注入租户信息
-            ir_path=str(json_file_path),  # 用户上传的 JSON 配置文件路径
-            whl_path=str(whl_path),  # 预编译的 whl 包路径
-            mode=DeployMode(deploy_type),
-            port=port,
-            deployment_id=deployment_id,
-            data={"userdata": userdata} if userdata else None,  # 用户自定义数据
+            DeployAgentParams(
+                name=deploy_query.name,
+                version="1.0.0",
+                user_id=user_id,
+                space_id=space_id,
+                mode=DeployMode(deploy_type),
+                extras={
+                    "ir_path": str(json_file_path),
+                    "whl_path": str(whl_path),
+                    "port": port,
+                    "deployment_id": deployment_id,
+                    "data": {"userdata": deploy_query.userdata}
+                    if deploy_query.userdata
+                    else None,
+                },
+            )
         )
 
         # 过滤内部实现细节，只返回用户需要的信息
@@ -210,10 +244,14 @@ async def list_agents(
 
     try:
         deployments = await manager.list_deployments(
-            deployment_type=DeploymentType.AGENT,
-            deployment_status=DeploymentStatus(status_filter) if status_filter else None,
-            user_id=user_id,  # 租户过滤
-            space_id=space_id,  # 租户过滤
+            ListDeploymentsParams(
+                deployment_type=DeploymentType.AGENT,
+                deployment_status=DeploymentStatus(status_filter)
+                if status_filter
+                else None,
+                user_id=user_id,
+                space_id=space_id,
+            )
         )
 
         # 过滤内部实现细节

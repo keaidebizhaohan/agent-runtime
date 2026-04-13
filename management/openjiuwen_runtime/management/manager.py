@@ -3,8 +3,8 @@
 
 import asyncio
 import uuid
+from dataclasses import dataclass, field
 from datetime import datetime
-from enum import Enum
 from typing import Any, Optional
 from urllib import request as urllib_request
 from urllib.parse import urljoin, urlparse, urlunparse
@@ -21,7 +21,12 @@ from .deployments import (
     DockerStrategy,
     K8sStrategy,
 )
-from .models.enums import DeploymentType, DeploymentStatus
+from .models.deployment_params import (
+    DeployAgentParams,
+    DeployPluginParams,
+    ListDeploymentsParams,
+)
+from .models.enums import DeployMode, DeploymentType, DeploymentStatus
 from .models.schemas import (
     DeploymentInfo,
     DeploymentCreate,
@@ -32,11 +37,17 @@ from .models.schemas import (
 logger = get_logger(__name__)
 
 
-class DeployMode(str, Enum):
-    """部署模式"""
-    SUBPROCESS = "subprocess"
-    DOCKER = "docker"
-    K8S = "k8s"
+@dataclass
+class _DeployExecutionParams:
+    """内部统一部署流程参数（由 deploy_agent / deploy_plugin 组装）"""
+
+    deployment_type: DeploymentType
+    name: str
+    version: str
+    mode: DeployMode
+    user_id: Optional[str] = None
+    space_id: Optional[str] = None
+    extras: dict[str, Any] = field(default_factory=dict)
 
 
 DEPLOYMENT_TABLE_DEF = TableDefinition(
@@ -124,96 +135,80 @@ class DeploymentManager:
         await self.db_handler.disconnect()
         logger.info("DeploymentManager shutdown complete")
     
-    async def deploy_agent(
-            self,
-            name: str,
-            version: str,
-            mode: DeployMode = DeployMode.SUBPROCESS,
-            user_id: Optional[str] = None,
-            space_id: Optional[str] = None,
-            **kwargs: Any,
-    ) -> DeploymentInfo:
+    async def deploy_agent(self, params: DeployAgentParams) -> DeploymentInfo:
         """部署Agent"""
         logger.info(
             "Deploying agent: name=%s, version=%s, mode=%s, user_id=%s, space_id=%s",
-            name,
-            version,
-            mode,
-            user_id,
-            space_id,
+            params.name,
+            params.version,
+            params.mode,
+            params.user_id,
+            params.space_id,
         )
-        kwargs["package_name"] = name
+        extras = dict(params.extras)
+        extras["package_name"] = params.name
         return await self._deploy(
-            deployment_type=DeploymentType.AGENT,
-            name=name,
-            version=version,
-            mode=mode,
-            user_id=user_id,
-            space_id=space_id,
-            **kwargs,
+            _DeployExecutionParams(
+                deployment_type=DeploymentType.AGENT,
+                name=params.name,
+                version=params.version,
+                mode=params.mode,
+                user_id=params.user_id,
+                space_id=params.space_id,
+                extras=extras,
+            )
         )
 
-    async def deploy_plugin(
-            self,
-            name: str,
-            version: str,
-            mode: DeployMode = DeployMode.SUBPROCESS,
-            url: Optional[str] = None,
-            user_id: Optional[str] = None,
-            space_id: Optional[str] = None,
-            **kwargs: Any,
-    ) -> DeploymentInfo:
+    async def deploy_plugin(self, params: DeployPluginParams) -> DeploymentInfo:
         """部署Plugin"""
         logger.info(
             "Deploying plugin: name=%s, version=%s, mode=%s, user_id=%s, space_id=%s",
-            name,
-            version,
-            mode,
-            user_id,
-            space_id,
+            params.name,
+            params.version,
+            params.mode,
+            params.user_id,
+            params.space_id,
         )
+        extras = dict(params.extras)
+        extras["url"] = params.url
         return await self._deploy(
-            deployment_type=DeploymentType.PLUGIN,
-            name=name,
-            version=version,
-            mode=mode,
-            url=url,
-            user_id=user_id,
-            space_id=space_id,
-            **kwargs,
+            _DeployExecutionParams(
+                deployment_type=DeploymentType.PLUGIN,
+                name=params.name,
+                version=params.version,
+                mode=params.mode,
+                user_id=params.user_id,
+                space_id=params.space_id,
+                extras=extras,
+            )
         )
 
-    async def list_deployments(
-            self,
-            deployment_type: Optional[DeploymentType] = None,
-            deployment_status: Optional[DeploymentStatus] = None,
-            user_id: Optional[str] = None,
-            space_id: Optional[str] = None,
-            limit: int = 100,
-            offset: int = 0,
-    ) -> list[DeploymentInfo]:
+    async def list_deployments(self, params: ListDeploymentsParams) -> list[DeploymentInfo]:
         """列出部署"""
         logger.debug(
             "Listing deployments: type=%s, status=%s, user_id=%s, space_id=%s, limit=%s, offset=%s",
-            deployment_type,
-            deployment_status,
-            user_id,
-            space_id,
-            limit,
-            offset,
+            params.deployment_type,
+            params.deployment_status,
+            params.user_id,
+            params.space_id,
+            params.limit,
+            params.offset,
         )
         filters = {}
-        if deployment_type:
-            filters[DeploymentFields.DEPLOYMENT_TYPE] = deployment_type.value
-        if deployment_status:
-            filters[DeploymentFields.DEPLOYMENT_STATUS] = deployment_status.value
-        if user_id:
-            filters[DeploymentFields.USER_ID] = user_id
-        if space_id:
-            filters[DeploymentFields.SPACE_ID] = space_id
+        if params.deployment_type:
+            filters[DeploymentFields.DEPLOYMENT_TYPE] = params.deployment_type.value
+        if params.deployment_status:
+            filters[DeploymentFields.DEPLOYMENT_STATUS] = params.deployment_status.value
+        if params.user_id:
+            filters[DeploymentFields.USER_ID] = params.user_id
+        if params.space_id:
+            filters[DeploymentFields.SPACE_ID] = params.space_id
 
         records = await self.db_handler.list_records(
-            DEPLOYMENT_TABLE_NAME, filters=filters if filters else None, limit=limit, offset=offset
+            DEPLOYMENT_TABLE_NAME,
+            filters=filters if filters else None,
+            limit=params.limit,
+            offset=params.offset,
         )
         result = [DeploymentInfo.model_validate(r if hasattr(r, "to_dict") else r) for r in records]
         logger.debug("Found %s deployments", len(result))
@@ -384,49 +379,50 @@ class DeploymentManager:
             f"Deployment {deployment_id} not ready within {timeout_seconds}s (last_status={last_status})"
         )
 
-    async def _deploy(
-            self,
-            deployment_type: DeploymentType,
-            name: str,
-            version: str,
-            mode: DeployMode,
-            user_id: Optional[str] = None,
-            space_id: Optional[str] = None,
-            **kwargs: Any,
-    ) -> DeploymentInfo:
+    async def _deploy(self, params: _DeployExecutionParams) -> DeploymentInfo:
         """内部部署方法"""
-        deployment_id = kwargs.pop("deployment_id", None) or self._generate_deployment_id()
+        extras = dict(params.extras)
+        deployment_id = extras.pop("deployment_id", None) or self._generate_deployment_id()
         now = datetime.utcnow()
 
-        logger.debug("deployment_id=%s, type=%s, name=%s", deployment_id, deployment_type, name)
+        logger.debug(
+            "deployment_id=%s, type=%s, name=%s",
+            deployment_id,
+            params.deployment_type,
+            params.name,
+        )
 
         create_model = DeploymentCreate(
             deployment_id=deployment_id,
-            version=version,
-            deployment_type=deployment_type,
-            name=name,
-            url=kwargs.get("url"),
-            user_id=user_id,
-            space_id=space_id,
-            data=kwargs.get("data"),
+            version=params.version,
+            deployment_type=params.deployment_type,
+            name=params.name,
+            url=extras.get("url"),
+            user_id=params.user_id,
+            space_id=params.space_id,
+            data=extras.get("data"),
         )
         deployment_data = create_model.model_dump()
         deployment_data[DeploymentFields.DEPLOYMENT_STATUS] = DeploymentStatus.PENDING.value
         deployment_data[DeploymentFields.CREATED_AT] = now
         deployment_data[DeploymentFields.UPDATED_AT] = now
-        
+
         await self.db_handler.create(DEPLOYMENT_TABLE_NAME, deployment_data)
 
-        strategy = self._get_strategy(mode)
+        strategy = self._get_strategy(params.mode)
 
         try:
             await strategy.create_record(
-                self.db_handler, deployment_id, version, **kwargs
+                self.db_handler, deployment_id, params.version, **extras
             )
             await strategy.deploy(deployment_id, self.db_handler)
 
             await self._wait_until_deployment_ready(deployment_id)
-            logger.info("Deployment completed: deployment_id=%s, name=%s", deployment_id, name)
+            logger.info(
+                "Deployment completed: deployment_id=%s, name=%s",
+                deployment_id,
+                params.name,
+            )
         except Exception as e:
             logger.error("Deployment failed: deployment_id=%s, error=%s", deployment_id, str(e))
             await self.db_handler.update(
@@ -436,7 +432,7 @@ class DeploymentManager:
             )
 
         deployment_record = await self.db_handler.get(
-            DEPLOYMENT_TABLE_NAME, 
-            {DeploymentFields.DEPLOYMENT_ID: deployment_id}
+            DEPLOYMENT_TABLE_NAME,
+            {DeploymentFields.DEPLOYMENT_ID: deployment_id},
         )
         return DeploymentInfo.model_validate(deployment_record)

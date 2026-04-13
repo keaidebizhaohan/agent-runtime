@@ -10,7 +10,11 @@ import unittest
 from pathlib import Path
 
 from openjiuwen_runtime.foundation.log import get_logger
-from openjiuwen_runtime.management import DeploymentManager, DeployMode
+from openjiuwen_runtime.management import (
+    DeployAgentParams,
+    DeploymentManager,
+    DeployMode,
+)
 from openjiuwen_runtime.foundation.db.sqlite_handler import SQLiteHandler
 from openjiuwen_runtime.foundation.packaging import package_python_to_whl
 
@@ -56,11 +60,12 @@ class ManagerTest(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(os.path.exists(whl_path), f"WHL file not found: {whl_path}")
 
             deployment_info = await self.manager.deploy_agent(
-                name="test_simple_agent",
-                version="1.0.0",
-                mode=DeployMode.SUBPROCESS,
-                package_name="simple_agent",
-                whl_path=whl_path,
+                DeployAgentParams(
+                    name="test_simple_agent",
+                    version="1.0.0",
+                    mode=DeployMode.SUBPROCESS,
+                    extras={"package_name": "simple_agent", "whl_path": whl_path},
+                )
             )
 
             self.assertIsNotNone(deployment_info)
@@ -96,11 +101,12 @@ class ManagerTest(unittest.IsolatedAsyncioTestCase):
                 project_root / "resources" / "examples" / "simple_agent" / "openjiuwen_agent-1.0.0-py3-none-any.whl")
 
             deployment_info = await self.manager.deploy_agent(
-                name="test_simple_agent",
-                version="1.0.0",
-                mode=DeployMode.SUBPROCESS,
-                package_name="simple_agent",
-                whl_path=whl_path,
+                DeployAgentParams(
+                    name="test_simple_agent",
+                    version="1.0.0",
+                    mode=DeployMode.SUBPROCESS,
+                    extras={"package_name": "simple_agent", "whl_path": whl_path},
+                )
             )
 
             self.assertIsNotNone(deployment_info)

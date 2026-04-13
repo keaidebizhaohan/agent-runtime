@@ -15,9 +15,11 @@ import os
 import shutil
 import subprocess
 import sys
+from pathlib import Path
 from typing import Dict
 
 from openjiuwen_runtime.foundation.config import settings
+from openjiuwen_runtime.foundation.log import get_logger
 from openjiuwen_runtime.foundation.log.utils import mask_userdata
 from openjiuwen_runtime.foundation.venv_manager import VirtualEnvironmentManager
 
@@ -25,9 +27,13 @@ from ...models.enums import DeploymentStatus
 from ..base.deployer import Deployer
 from ..base.models import DeployContext, DeployResult
 from .models import SubprocessParams
-from openjiuwen_runtime.foundation.log import get_logger
 
 logger = get_logger(__name__)
+
+
+def _windows_system32_exe(filename: str) -> str:
+    system_root = os.environ.get("SYSTEMROOT", r"C:\Windows")
+    return str(Path(system_root) / "System32" / filename)
 
 
 class LocalSubprocessDeployer(Deployer[SubprocessParams]):
@@ -47,12 +53,12 @@ class LocalSubprocessDeployer(Deployer[SubprocessParams]):
         """通过 PID 终止进程（跨进程有效）"""
         try:
             if sys.platform == "win32":
-                cmd = f"taskkill /F /PID {pid}"
+                taskkill = _windows_system32_exe("taskkill.exe")
                 result = subprocess.run(
-                    cmd,
-                    shell=True,
+                    [taskkill, "/F", "/PID", str(pid)],
+                    shell=False,
                     capture_output=True,
-                    text=True
+                    text=True,
                 )
                 success = result.returncode == 0
                 if success:
@@ -62,9 +68,9 @@ class LocalSubprocessDeployer(Deployer[SubprocessParams]):
                 return success
             else:
                 result = subprocess.run(
-                    ["kill", "-9", str(pid)],
+                    ["/bin/kill", "-9", str(pid)],
                     capture_output=True,
-                    text=True
+                    text=True,
                 )
                 success = result.returncode == 0
                 if success:
@@ -79,16 +85,17 @@ class LocalSubprocessDeployer(Deployer[SubprocessParams]):
     def _check_process_by_pid(self, pid: int) -> bool:
         """通过 PID 检查进程是否运行"""
         if sys.platform == "win32":
+            tasklist = _windows_system32_exe("tasklist.exe")
             result = subprocess.run(
-                ["tasklist", "/FI", f"PID eq {pid}"],
+                [tasklist, "/FI", f"PID eq {pid}"],
                 capture_output=True,
-                text=True
+                text=True,
             )
             return str(pid) in result.stdout
         else:
             result = subprocess.run(
-                ["kill", "-0", str(pid)],
-                capture_output=True
+                ["/bin/kill", "-0", str(pid)],
+                capture_output=True,
             )
             return result.returncode == 0
 
@@ -191,7 +198,9 @@ class LocalSubprocessDeployer(Deployer[SubprocessParams]):
             if process.poll() is not None:
                 # 进程已经退出，读取错误信息
                 stdout, stderr = process.communicate()
-                error_msg = stderr.decode('utf-8', errors='ignore') or stdout.decode('utf-8', errors='ignore') or "Unknown error"
+                stderr_txt = stderr.decode("utf-8", errors="ignore")
+                stdout_txt = stdout.decode("utf-8", errors="ignore")
+                error_msg = stderr_txt or stdout_txt or "Unknown error"
                 logger.error("Process exited for %s: %s", deployment_id, error_msg)
                 raise RuntimeError(f"Process exited: {error_msg}")
 

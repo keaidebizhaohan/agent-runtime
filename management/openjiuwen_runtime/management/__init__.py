@@ -3,10 +3,18 @@
 
 """OpenJiuwen Runtime Management SDK"""
 
-from .manager import DeploymentManager, DeployMode
-from .models.enums import DeploymentType, DeploymentStatus
-from .models.schemas import DeploymentInfo, DEPLOYMENT_TABLE_NAME, DeploymentFields
 from openjiuwen_runtime.foundation.db.handler import DBHandler
+from openjiuwen_runtime.foundation.db.mysql_handler import MySQLHandler
+from openjiuwen_runtime.foundation.db.sqlite_handler import SQLiteHandler
+
+from .manager import DeploymentManager
+from .models.deployment_params import (
+    DeployAgentParams,
+    DeployPluginParams,
+    ListDeploymentsParams,
+)
+from .models.enums import DeployMode, DeploymentType, DeploymentStatus
+from .models.schemas import DeploymentInfo, DEPLOYMENT_TABLE_NAME, DeploymentFields
 from .deployments import (
     CommonParams,
     DeployContext,
@@ -33,13 +41,14 @@ from .deployments import (
     K8sStrategy,
 )
 
-from openjiuwen_runtime.foundation.db.sqlite_handler import SQLiteHandler
-from openjiuwen_runtime.foundation.db.mysql_handler import MySQLHandler
-
 __all__ = [
     # Manager
     "DeploymentManager",
     "DeployMode",
+    # Deployment params
+    "DeployAgentParams",
+    "DeployPluginParams",
+    "ListDeploymentsParams",
     # Enums
     "DeploymentType",
     "DeploymentStatus",

@@ -14,7 +14,8 @@ from typing import AsyncIterator, Tuple
 
 # 添加项目根目录到路径
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT))
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.append(str(PROJECT_ROOT))
 
 from openjiuwen_runtime.foundation.log import get_logger
 from openjiuwen_runtime.service import AgentApp, AppGroup

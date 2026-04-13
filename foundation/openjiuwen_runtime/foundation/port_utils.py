@@ -15,7 +15,12 @@ def is_port_available(port: int, host: str = "0.0.0.0") -> bool:
         return False
 
 
-def allocate_port(start_port: int = 8090, max_port: int = 9090, host: str = "127.0.0.1", exclude_ports: set[int] | None = None) -> int:
+def allocate_port(
+    start_port: int = 8090,
+    max_port: int = 9090,
+    host: str = "127.0.0.1",
+    exclude_ports: set[int] | None = None,
+) -> int:
     """分配可用端口
 
     Args:

@@ -177,7 +177,8 @@ def _setup_logging():
     log_dir = os.path.join(venv_path, "logs")
     log_level_name = os.environ.get("LOWCODE_AGENT_LOG_LEVEL", "INFO").upper()
     log_level = getattr(logging, log_level_name, logging.INFO)
-    disable_global_stream_log = os.environ.get("LOWCODE_AGENT_DISABLE_GLOBAL_STREAM_LOG", "1").lower() in ("1", "true", "yes", "on")
+    _disable_raw = os.environ.get("LOWCODE_AGENT_DISABLE_GLOBAL_STREAM_LOG", "1").lower()
+    disable_global_stream_log = _disable_raw in ("1", "true", "yes", "on")
 
     # 确保日志目录存在
     os.makedirs(log_dir, exist_ok=True)
@@ -191,17 +192,17 @@ def _setup_logging():
     global _ALLOWED_LOG_HANDLER_IDS
 
     # 配置 root logger
-    logger = logging.getLogger("lowcode_agent")
-    logger.setLevel(log_level)
+    agent_logger = logging.getLogger("lowcode_agent")
+    agent_logger.setLevel(log_level)
 
     # 避免重复添加 handler
-    if not logger.handlers:
+    if not agent_logger.handlers:
         # 文件 handler
         file_handler = logging.FileHandler(log_file, encoding='utf-8')
         file_handler.setLevel(log_level)
         file_formatter = logging.Formatter(log_format, datefmt=date_format)
         file_handler.setFormatter(file_formatter)
-        logger.addHandler(file_handler)
+        agent_logger.addHandler(file_handler)
         _ALLOWED_LOG_HANDLER_IDS = {id(file_handler)}
 
         # ==================== 捕获 openjiuwen 模块日志 ====================
@@ -235,7 +236,7 @@ def _setup_logging():
             def _strict_add_handler(self, hdlr):
                 target_name = getattr(self, "name", "")
                 if target_name in _STRICT_LOGGER_HANDLER_NAMES and id(hdlr) not in _ALLOWED_LOG_HANDLER_IDS:
-                    return
+                    return None
                 return original_add_handler(self, hdlr)
             logging.Logger.addHandler = _strict_add_handler
             setattr(logging.Logger, "_lowcode_strict_add_handler_patched", True)
@@ -264,15 +265,18 @@ def _setup_logging():
                     if isinstance(h, logging.StreamHandler) and not isinstance(h, logging.FileHandler):
                         target_logger.removeHandler(h)
 
-        logger.info("=" * 60)
-        logger.info(f"Lowcode Agent Runner 启动")
-        logger.info(f"虚拟环境路径: {venv_path}")
-        logger.info(f"日志文件路径: {log_file}")
-        logger.info(f"全局 StreamHandler 移除: {'开启' if disable_global_stream_log else '关闭'}")
-        logger.info(f"已捕获 openjiuwen 模块日志: {', '.join(openjiuwen_loggers)}")
-        logger.info("=" * 60)
+        agent_logger.info("=" * 60)
+        agent_logger.info("Lowcode Agent Runner 启动")
+        agent_logger.info("虚拟环境路径: %s", venv_path)
+        agent_logger.info("日志文件路径: %s", log_file)
+        agent_logger.info(
+            "全局 StreamHandler 移除: %s",
+            "开启" if disable_global_stream_log else "关闭",
+        )
+        agent_logger.info("已捕获 openjiuwen 模块日志: %s", ", ".join(openjiuwen_loggers))
+        agent_logger.info("=" * 60)
 
-    return logger
+    return agent_logger
 
 
 def _summarize_chunk_for_log(chunk) -> str:
@@ -417,7 +421,6 @@ async def init():
 
     # 启动 Runner
     logger.info("启动 Runner...")
-    from openjiuwen.core.runner import Runner
 
     # 设置工作流超时时间（支持从环境变量获取，默认 5 分钟）
     workflow_timeout = os.environ.get("WORKFLOW_EXECUTE_TIMEOUT", "300")

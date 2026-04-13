@@ -113,38 +113,36 @@ class AppGroup:
         async def startup():
             """按顺序执行所有挂载应用的 init 钩子"""
             for prefix, app in self._mounted_apps.items():
-                if app._init_hook:
-                    try:
-                        await app._init_hook()
+                try:
+                    if await app.run_init_hook():
                         logger.info(
                             "[OK] %s 初始化完成 (挂载于 %s)",
                             app.app_name,
                             prefix,
                         )
-                    except Exception as e:
-                        logger.error(
-                            "[ERROR] %s 初始化失败: %s",
-                            app.app_name,
-                            e,
-                            exc_info=True,
-                        )
-                        raise
+                except Exception as e:
+                    logger.error(
+                        "[ERROR] %s 初始化失败: %s",
+                        app.app_name,
+                        e,
+                        exc_info=True,
+                    )
+                    raise
 
         @self.app.on_event("shutdown")
         async def shutdown():
             """按逆序执行所有挂载应用的 shutdown 钩子"""
             for prefix, app in reversed(list(self._mounted_apps.items())):
-                if app._shutdown_hook:
-                    try:
-                        await app._shutdown_hook()
+                try:
+                    if await app.run_shutdown_hook():
                         logger.info("[OK] %s 关闭完成", app.app_name)
-                    except Exception as e:
-                        logger.warning(
-                            "[WARN] %s 关闭钩子执行失败: %s",
-                            app.app_name,
-                            e,
-                            exc_info=True,
-                        )
+                except Exception as e:
+                    logger.warning(
+                        "[WARN] %s 关闭钩子执行失败: %s",
+                        app.app_name,
+                        e,
+                        exc_info=True,
+                    )
 
     def _register_routes(self):
         """注册 AppGroup 特定路由"""
@@ -173,7 +171,7 @@ class AppGroup:
 
                 elif isinstance(app, PluginApp):
                     app_info["type"] = "plugin"
-                    app_info["tools_count"] = len(app._tools)
+                    app_info["tools_count"] = app.tools_count
 
                 else:
                     app_info["type"] = "base"

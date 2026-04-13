@@ -64,7 +64,7 @@ def _parse_cli_args() -> Dict[str, Any]:
         file_path = str(Path(args.irpath).resolve())
         if not Path(args.irpath).exists():
             logger.error("配置文件不存在: %s", file_path)
-            sys.exit(1)
+            parser.error(f"配置文件不存在: {file_path}")
         result["file"] = file_path
 
     return result
@@ -104,6 +104,20 @@ class BaseApp:
 
         # 注册基础路由
         self._register_base_routes()
+
+    async def run_init_hook(self) -> bool:
+        """执行通过 @init 注册的钩子（供 AppGroup 等外部容器调用）。返回是否实际执行了钩子。"""
+        if self._init_hook:
+            await self._init_hook()
+            return True
+        return False
+
+    async def run_shutdown_hook(self) -> bool:
+        """执行通过 @shutdown 注册的钩子（供 AppGroup 等外部容器调用）。返回是否实际执行了钩子。"""
+        if self._shutdown_hook:
+            await self._shutdown_hook()
+            return True
+        return False
 
     def init(self, func: Callable) -> Callable:
         """

@@ -7,6 +7,8 @@ import asyncio
 import os
 from typing import Optional
 
+from openjiuwen_runtime.foundation.log import get_logger
+
 from ..base.deployer import Deployer
 from ..base.models import DeployContext, DeployResult
 from .models import K8sParams

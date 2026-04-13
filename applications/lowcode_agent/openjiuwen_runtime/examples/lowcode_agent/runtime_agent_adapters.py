@@ -8,7 +8,14 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
-from openjiuwen_studio.core.common.dsl import McpConfig, McpTransport, Param, PluginCodeConfig, PluginType, RestfulApiSchema
+from openjiuwen_studio.core.common.dsl import (
+    McpConfig,
+    McpTransport,
+    Param,
+    PluginCodeConfig,
+    PluginType,
+    RestfulApiSchema,
+)
 from openjiuwen_studio.core.executor.plugin.plugin_mgr import PluginManager
 from openjiuwen_studio.core.executor.plugin.plugin_tools import CodeTool, McpTool, ServiceTool
 
@@ -99,7 +106,10 @@ def _build_service_tool(plugin_data: Dict[str, Any], tool_data: Dict[str, Any]) 
             params=[_build_param(p) for p in (tool_data.get("request_params") or tool_data.get("inputs") or [])],
             path=path,
             headers=dict(tool_data.get("headers") or plugin_data.get("headers") or {}),
-            method=method_map.get(str(tool_data.get("method") or "").lower(), str(tool_data.get("method") or "GET").upper()),
+            method=method_map.get(
+                str(tool_data.get("method") or "").lower(),
+                str(tool_data.get("method") or "GET").upper(),
+            ),
             response=[_build_param(p) for p in (tool_data.get("response_params") or tool_data.get("outputs") or [])],
         )
     )
@@ -177,7 +187,10 @@ class RuntimePluginManager(PluginManager):
         if record is None and tool_id == plugin_id:
             record = self._plugin_default_tool.get((plugin_id, ""))
         if record is None:
-            raise ValueError(f"Runtime plugin tool not found: plugin_id={plugin_id}, tool_id={tool_id}, version={version}")
+            raise ValueError(
+                f"Runtime plugin tool not found: plugin_id={plugin_id}, "
+                f"tool_id={tool_id}, version={version}"
+            )
 
         plugin_data, tool_data, plugin_type = record
         if plugin_type == PluginType.SERVICE:

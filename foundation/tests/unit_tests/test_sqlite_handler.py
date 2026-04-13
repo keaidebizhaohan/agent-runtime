@@ -7,11 +7,11 @@ import os
 import tempfile
 import unittest
 
-from openjiuwen_runtime.management.sdk.db.sqlite_handler import SQLiteHandler
-from openjiuwen_runtime.management.sdk.models.table_def import (
-    TableDefinition,
+from openjiuwen_runtime.foundation.db.sqlite_handler import SQLiteHandler
+from openjiuwen_runtime.foundation.db.table_def import (
     ColumnDefinition,
     IndexDefinition,
+    TableDefinition,
 )
 
 
@@ -51,7 +51,7 @@ class TestSQLiteHandler(unittest.IsolatedAsyncioTestCase):
     async def test_init_table(self):
         """测试初始化表"""
         await self.handler.init_table(self.test_table_def)
-        self.assertIn("test_table", self.handler._table_models)
+        self.assertTrue(self.handler.is_table_registered("test_table"))
 
     async def test_create(self):
         """测试创建记录"""

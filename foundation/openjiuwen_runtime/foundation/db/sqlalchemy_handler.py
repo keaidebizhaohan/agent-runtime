@@ -36,6 +36,10 @@ class SQLAlchemyHandler(DBHandler):
         self._table_models: dict[str, Any] = {}
         logger.debug("SQLAlchemyHandler created")
 
+    def is_table_registered(self, table_name: str) -> bool:
+        """是否已通过 init_table 注册过对应 ORM 模型（供测试等场景使用）。"""
+        return table_name in self._table_models
+
     async def connect(self) -> None:
         logger.info("Connecting to database")
         # 关闭 aiosqlite 的 DEBUG 日志
