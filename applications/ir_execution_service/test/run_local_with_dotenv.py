@@ -13,20 +13,23 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import sys
 from pathlib import Path
 
-from openjiuwen_runtime.foundation.log import get_logger
-
-_LOG = get_logger(__name__)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
+)
+_BOOT_LOG = logging.getLogger(__name__)
 
 # 本文件在 .../ir_execution_service/test/；应用与 ir_execution_service_app 在上一级
 _SERVICE_ROOT = Path(__file__).resolve().parent.parent
 _TEST_IR_ROOT = Path(__file__).resolve().parent
 
 
-def _ensure_env() -> None:
+def _ensure_env(log: logging.Logger) -> None:
     try:
         from dotenv import load_dotenv
     except ImportError as e:
@@ -37,7 +40,7 @@ def _ensure_env() -> None:
             load_dotenv(env_path)
             break
     else:
-        _LOG.warning(
+        log.warning(
             "未找到 %s 或 %s，仅使用当前进程已有环境变量",
             _SERVICE_ROOT / ".env",
             _TEST_IR_ROOT / ".env",
@@ -60,10 +63,15 @@ def _ensure_env() -> None:
 
 def main() -> None:
     try:
-        _ensure_env()
+        _ensure_env(_BOOT_LOG)
     except ImportError as e:
-        _LOG.error("%s", e)
+        _BOOT_LOG.error("%s", e)
         sys.exit(1)
+
+    # 本脚本仅用于本地测试，优先使用标准库 logging，避免额外依赖与 import-time 副作用。
+    # 注意：后续导入 ir_execution_service_app/openjiuwen_runtime.service 仍可能触发 foundation Settings 初始化，
+    # 因此必须确保 dotenv 已加载（见上面的 _ensure_env）。
+    log = logging.getLogger(__name__)
 
     service = str(_SERVICE_ROOT)
     if service not in sys.path:
@@ -73,7 +81,7 @@ def main() -> None:
 
     host = (os.environ.get("IR_EXEC_HOST") or "0.0.0.0").strip()
     port = int((os.environ.get("IR_EXEC_PORT") or "8090").strip())
-    _LOG.info(
+    log.info(
         "IR 本地目录: %s\n请求 ir_path 需为该目录下的相对路径，例如 complicated_dsl.json 对应 test/complicated_dsl.json\n"
         "监听: http://%s:%s",
         os.environ.get("LOWCODE_IR_DOWNLOAD_DIR"),
