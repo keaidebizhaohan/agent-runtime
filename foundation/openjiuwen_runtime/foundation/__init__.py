@@ -18,7 +18,6 @@ from .docker_utils import (
     remove_docker_image,
     generate_dockerfile,
 )
-from .config import settings
 
 __all__ = [
     "package_python_to_whl",
@@ -34,5 +33,4 @@ __all__ = [
     "tag_docker_image",
     "remove_docker_image",
     "generate_dockerfile",
-    "settings",
 ]
