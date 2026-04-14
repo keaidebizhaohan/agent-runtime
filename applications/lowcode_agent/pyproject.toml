@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Lowcode Agent Runner - 从导出的 JSON 配置加载并运行 Agent"
 requires-python = ">=3.11.4"
 dependencies = [
-    "openjiuwen[chromadb,obs]==0.1.9",
+    "openjiuwen[chromadb,obs]==0.1.10",
     "fastapi==0.115.11",
     "uvicorn[standard]==0.42.0",
     "pydantic==2.11.7",
