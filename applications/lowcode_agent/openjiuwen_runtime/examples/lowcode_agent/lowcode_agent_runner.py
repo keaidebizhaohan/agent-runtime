@@ -76,6 +76,9 @@ _WORKFLOW_TIMEOUT = os.getenv("WORKFLOW_EXECUTE_TIMEOUT", "300")
 os.environ.setdefault("WORKFLOW_EXECUTE_TIMEOUT", _WORKFLOW_TIMEOUT)
 os.environ.setdefault("WORKFLOW_STREAM_FRAME_TIMEOUT", _WORKFLOW_TIMEOUT)
 os.environ.setdefault("WORKFLOW_STREAM_FIRST_FRAME_TIMEOUT", _WORKFLOW_TIMEOUT)
+# 默认关闭校验以对齐 Studio 插件调试行为，若生产环境需要严格校验可显式覆盖为 true。
+os.environ.setdefault("RESTFUL_SSL_VERIFY", "false")
+os.environ.setdefault("HTTP_SSL_VERIFY", "false")
 
 _CODE_SANDBOX_URL = os.getenv("CODE_SANDBOX_URL", "")
 if not _CODE_SANDBOX_URL:
