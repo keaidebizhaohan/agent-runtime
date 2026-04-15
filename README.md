@@ -69,8 +69,10 @@ agent-runtime/
 
 ## 环境要求
 
-- Python >= 3.11.4
-- `uv` >= 0.25.x
+* python>=3.11.4
+* uv>=0.25.x
+* git（用于拉取代码）
+* bash（Linux/macOS 系统）或 PowerShell（Windows 系统）
 
 ## 快速开始
 
@@ -81,49 +83,36 @@ git clone https://gitcode.com/openJiuwen/agent-runtime.git
 cd agent-runtime
 ```
 
-### 2) 安装依赖（源码方式）
+### 2) 准备环境配置
 
 ```bash
 cd server
-uv sync
-uv pip install -e ../management --force-reinstall
-uv pip install -e ../foundation --force-reinstall
+cp .env.example .env
 ```
 
-### 3) 配置环境变量
+然后按需修改 `server/.env`，重点包括：
 
-在 `server/` 目录下创建 `.env` 文件，填入以下必选配置：
-
-```bash
-# 必选配置
-IP=<你的服务器IP>
-LOWCODE_IMAGE=<低码Agent的Docker镜像地址>
-
-# 可选配置（以下为默认值）
-# PORT=8186
-# DB_TYPE=sqlite
-# DEPLOY_TYPE=subprocess
-# DEPLOY_DIR=/tmp/deploys
-# DIST_DIR=/tmp/dist
-```
+- `DB_TYPE`：支持 `sqlite` / `mysql`
+- `IP`：Runtime 服务地址
+- `LOWCODE_IMAGE`：低码 Agent 相关镜像配置
 
 完整配置项说明请参考 `docs/zh/2. 配置说明.md`。
 
-### 4) 启动服务
+### 3) 一键启动 Runtime 服务
 
-方式 A：直接启动 FastAPI 服务
-
-```bash
-uvicorn openjiuwen_runtime.server.main:app --host 0.0.0.0 --port 8186
-```
-
-方式 B：运行入口模块
+Linux / macOS:
 
 ```bash
-python -m openjiuwen_runtime.server.main
+bash scripts/run-server.sh
 ```
 
-> 默认监听端口为 `8186`，可通过环境变量 `PORT` 覆盖。
+Windows（PowerShell）:
+
+```powershell
+.\scripts\run-server.ps1
+```
+
+脚本会自动完成依赖安装、构建与服务拉起。默认监听端口为 `8186`（可通过 `PORT` 覆盖）。
 
 ## API 概览
 
