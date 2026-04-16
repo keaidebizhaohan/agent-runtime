@@ -1,0 +1,53 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ir-execution-service"
+version = "0.1.0"
+description = "IR 执行 HTTP 服务：Runner、记忆引擎、OBS、DSL 工作流编译"
+requires-python = ">=3.11.4"
+# openjiuwen-runtime-service：本仓库 agent-runtime/service（会传递依赖 openjiuwen-runtime-foundation）。
+# openjiuwen：从 PyPI 安装（>=0.1.9）。
+# openjiuwen_studio：从 git 拉取 backend 子目录源码。
+dependencies = [
+    "openjiuwen[chromadb,obs]>=0.1.9",
+    "openjiuwen_studio>=0.1.7",
+    "openjiuwen-runtime-service",
+    "filelock>=3.13.0",
+    "fastapi>=0.104.0",
+    "uvicorn[standard]>=0.24.0",
+    "pydantic>=2.5.0",
+    "sse-starlette>=1.8.0",
+    "python-dotenv>=1.2.1",
+]
+
+[tool.uv.sources]
+openjiuwen-runtime-service = { path = "../../service", editable = true }
+
+[tool.uv]
+default-groups = ["dev"]
+
+[dependency-groups]
+dev = [
+    "pytest==8.3.5",
+    "pytest-asyncio==1.2.0",
+]
+
+[[tool.uv.index]]
+url = "https://mirrors.aliyun.com/pypi/simple/"
+
+[tool.setuptools.packages.find]
+where = ["."]
+exclude = ["*.egg-info", "test_script", "ir_for_test", "logs"]
+include = ["runtime_support*"]
+
+[tool.setuptools]
+py-modules = [
+    "dsl_workflow_dependency_loader",
+    "invoke_api",
+    "ir_execution_service_app",
+    "react_agent_builder",
+    "stream_api",
+    "workflow_ir_builder",
+]
