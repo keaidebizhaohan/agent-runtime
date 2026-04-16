@@ -61,7 +61,7 @@ RUN pip install uv -i ${INDEX_URL}
 RUN uv pip install /app/dist/openjiuwen_studio-${STUDIO_VERSION}-py3-none-any.whl --index-url ${INDEX_URL} --target=/app/site-packages
 RUN uv pip install /app/dist/lowcode_agent_runner-${LOWCODE_AGENT_VERSION}-py3-none-any.whl --index-url ${INDEX_URL} --target=/app/site-packages
 RUN uv pip install /app/dist/openjiuwen_runtime_service-${RUNTIME_SERVICE_VERSION}-py3-none-any.whl --index-url ${INDEX_URL} --target=/app/site-packages
-RUN uv pip install /app/dist/openjiuwen_runtime_foundation-${RUNTIME_SERVICE_VERSION}-py3-none-any.whl --index-url ${INDEX_URL} --target=/app/site-packages
+RUN uv pip install /app/dist/openjiuwen_runtime_foundation-${RUNTIME_FOUNDATION_VERSION}-py3-none-any.whl --index-url ${INDEX_URL} --target=/app/site-packages
 
 EXPOSE 8090
 

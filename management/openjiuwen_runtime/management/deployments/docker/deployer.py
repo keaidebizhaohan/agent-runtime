@@ -155,6 +155,20 @@ class DockerDeployer(Deployer[DockerParams]):
                 json.dumps(docker_params.__dict__, indent=2, ensure_ascii=False),
             )
 
+            # Inject parent container proxy environment variables
+            proxy_env = {
+                "HTTP_PROXY": os.getenv("HTTP_PROXY", ""),
+                "HTTPS_PROXY": os.getenv("HTTPS_PROXY", ""),
+                "NO_PROXY": os.getenv("NO_PROXY", ""),
+                "http_proxy": os.getenv("http_proxy", ""),
+                "https_proxy": os.getenv("https_proxy", ""),
+                "no_proxy": os.getenv("no_proxy", ""),
+            }
+            # Filter empty proxy values
+            proxy_env_filtered = {k: v for k, v in proxy_env.items() if v}
+            # Merge proxy env with custom env, custom env has higher priority
+            env_vars = {**proxy_env_filtered, **env_vars}
+
             # 非低码情况
             if not ir_path:
                 if not whl_path:
