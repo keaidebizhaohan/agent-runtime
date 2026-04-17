@@ -96,14 +96,16 @@ try {
     Invoke-CheckedCommand -FilePath "git" -Arguments @("submodule", "update", "--init", "--recursive") -ErrorMessage "git submodule update --init failed"
     Invoke-CheckedCommand -FilePath "git" -Arguments @("submodule", "update", "--remote", "--recursive") -ErrorMessage "git submodule update --remote failed"
 
-    Remove-LinesContaining -Path (Join-Path $ProjectDir "applications\lowcode_agent\pyproject.toml") -Keyword "openjiuwen_studio"
     Remove-LinesContaining -Path (Join-Path $ProjectDir "applications\lowcode_agent\pyproject.toml") -Keyword "openjiuwen-runtime-service"
     Remove-LinesContaining -Path (Join-Path $ProjectDir "management\pyproject.toml") -Keyword "openjiuwen-runtime-foundation"
     Remove-LinesContaining -Path (Join-Path $ProjectDir "server\pyproject.toml") -Keyword "openjiuwen-runtime-management"
     Convert-FileToUtf8NoBom -Path (Join-Path $ProjectDir "applications\lowcode_agent\pyproject.toml")
     Convert-FileToUtf8NoBom -Path (Join-Path $ProjectDir "management\pyproject.toml")
     Convert-FileToUtf8NoBom -Path (Join-Path $ProjectDir "server\pyproject.toml")
-    Convert-FileToUtf8NoBom -Path (Join-Path $ProjectDir "agent-studio\backend\pyproject.toml")
+    $StudioBackendDir = Join-Path $ProjectDir "agent-studio\backend"
+    if (Test-Path $StudioBackendDir) {
+        Convert-FileToUtf8NoBom -Path (Join-Path $StudioBackendDir "pyproject.toml")
+    }
 
     $FinalDistDir = Resolve-DistDir -ProjectDir $ProjectDir
     Write-Info "Final dist dir: $FinalDistDir"
@@ -117,12 +119,16 @@ try {
         $UvExtraArgs = $env:UV_EXTRA_ARGS -split "\s+"
     }
 
-    Push-Location (Join-Path $ProjectDir "agent-studio\backend")
-    try {
-        Invoke-CheckedCommand -FilePath "uv" -Arguments (@("sync") + $UvExtraArgs) -ErrorMessage "uv sync failed in agent-studio/backend"
-        if (Test-Path "dist") { Remove-Item "dist" -Recurse -Force -ErrorAction SilentlyContinue }
-        Invoke-CheckedCommand -FilePath "uv" -Arguments (@("build", "--out-dir", $FinalDistDir) + $UvExtraArgs) -ErrorMessage "uv build failed in agent-studio/backend"
-    } finally { Pop-Location }
+    if (Test-Path $StudioBackendDir) {
+        Push-Location $StudioBackendDir
+        try {
+            Invoke-CheckedCommand -FilePath "uv" -Arguments (@("sync") + $UvExtraArgs) -ErrorMessage "uv sync failed in agent-studio/backend"
+            if (Test-Path "dist") { Remove-Item "dist" -Recurse -Force -ErrorAction SilentlyContinue }
+            Invoke-CheckedCommand -FilePath "uv" -Arguments (@("build", "--out-dir", $FinalDistDir) + $UvExtraArgs) -ErrorMessage "uv build failed in agent-studio/backend"
+        } finally { Pop-Location }
+    } else {
+        Write-Info "agent-studio/backend not found, use openjiuwen_studio from package index."
+    }
 
     $AgentCoreDir = Join-Path $ProjectDir "..\agent-core"
     if (Test-Path $AgentCoreDir) {
