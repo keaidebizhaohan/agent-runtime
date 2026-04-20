@@ -46,6 +46,10 @@ do
         applications/lowcode_agent)
             sed -i 's/"openjiuwen-runtime-service==.*"/"openjiuwen-runtime-service=='"${VERSION}"'"/' pyproject.toml
             ;;
+        applications/ir_execution_service)
+            sed -i 's/"openjiuwen-runtime-foundation==.*"/"openjiuwen-runtime-foundation=='"${VERSION}"'"/' pyproject.toml
+            sed -i 's/"openjiuwen-runtime-service==.*"/"openjiuwen-runtime-service=='"${VERSION}"'"/' pyproject.tom
+            ;;
         *)
             ;;
     esac
