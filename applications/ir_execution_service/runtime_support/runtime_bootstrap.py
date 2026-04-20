@@ -32,8 +32,9 @@ async def init_redis_checkpointer() -> None:
 
     import openjiuwen.extensions.checkpointer.redis.checkpointer  # noqa: F401
 
-    explicit = clean_env_value("CHECKPOINTER_REDIS_URL")
-    url = explicit or MemoryEngineManager.build_redis_url()
+    url = clean_env_value("CHECKPOINTER_REDIS_URL") or clean_env_value("REDIS_URL")
+    if not url:
+        url = MemoryEngineManager.build_redis_url()
     conf: dict = {"connection": {"url": url}}
 
     ttl_min = get_int_env("CHECKPOINTER_DEFAULT_TTL_MINUTES", 0)

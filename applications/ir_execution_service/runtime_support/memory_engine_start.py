@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import os
 from pathlib import Path
 from urllib.parse import quote
 
@@ -23,6 +24,7 @@ from openjiuwen.core.memory import LongTermMemory, MemoryEngineConfig
 from openjiuwen.core.memory.config.config import MemoryScopeConfig
 from openjiuwen.core.retrieval.common.config import EmbeddingConfig
 from openjiuwen.core.retrieval.embedding.api_embedding import APIEmbedding
+from openjiuwen_studio.core.manager.model_manager.utils.security_utils import SecurityUtils
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from .runtime_env import (
@@ -34,6 +36,7 @@ from .runtime_env import (
     resolve_llm_api_key_from_env,
 )
 from .runtime_env_prepare import prepare_runtime_environment
+from .studio_secrets import resolve_secret_env
 
 _APP_ROOT = Path(__file__).resolve().parent.parent
 
@@ -43,7 +46,7 @@ def get_database_url() -> str:
     if db_type == "mysql":
         # userinfo 中 @ : / 等需百分号编码，否则密码含特殊字符时 URL 会解析错误
         user = quote(get_env("DB_USER", "root"), safe="")
-        password = quote(get_env("DB_PASSWORD", ""), safe="")
+        password = quote(resolve_secret_env("DB_PASSWORD", ""), safe="")
         host = get_env("DB_HOST", "localhost")
         port = get_int_env("DB_PORT", 3306)
         database = get_env("AGENT_DB_NAME", "openjiuwen_agent")
@@ -137,7 +140,7 @@ class MemoryEngineManager:
         provider = clean_env_value("DEFAULT_LLM_MODEL_PROVIDER", "OpenAI")
         model_name = clean_env_value("DEFAULT_LLM_MODEL_NAME")
         api_base = clean_env_value("DEFAULT_LLM_API_BASE")
-        api_key = clean_env_value("DEFAULT_LLM_API_KEY")
+        api_key = resolve_secret_env("DEFAULT_LLM_API_KEY", "")
         if not api_key and api_base:
             api_key = resolve_llm_api_key_from_env(api_base)
         return provider, model_name, api_base, api_key
@@ -179,12 +182,9 @@ class MemoryEngineManager:
 
     @staticmethod
     def build_redis_url() -> str:
-        explicit = clean_env_value("REDIS_URL")
-        if explicit:
-            return explicit
         host = clean_env_value("REDIS_HOST", "localhost")
         port = get_int_env("REDIS_PORT", 6379)
-        password = clean_env_value("REDIS_PASSWORD")
+        password = resolve_secret_env("REDIS_PASSWORD", "")
         username = clean_env_value("REDIS_USERNAME")
         db = get_int_env("REDIS_DB", 0)
         if password:
@@ -199,7 +199,9 @@ class MemoryEngineManager:
         from redis.asyncio import Redis
         from openjiuwen.extensions.store.kv.redis_store import RedisStore
 
-        url = MemoryEngineManager.build_redis_url()
+        url = clean_env_value("REDIS_URL")
+        if not url:
+            url = MemoryEngineManager.build_redis_url()
         logger.info(
             "Memory engine KV: RedisStore (%s)",
             url.split("@")[-1] if "@" in url else url,
@@ -209,11 +211,11 @@ class MemoryEngineManager:
 
     @staticmethod
     def _resolve_milvus_token() -> str | None:
-        raw = get_env("MILVUS_TOKEN").strip()
+        raw = resolve_secret_env("MILVUS_TOKEN", "").strip()
         if raw:
             return raw
         user = get_env("MILVUS_USER", "root").strip() or "root"
-        password = get_env("MILVUS_PASSWORD").strip()
+        password = resolve_secret_env("MILVUS_PASSWORD", "").strip()
         if not password:
             return None
         return f"{user}:{password}"
@@ -250,6 +252,16 @@ class MemoryEngineManager:
 
     @staticmethod
     def _decode_master_key() -> bytes:
+        if os.getenv("HUAWEICLOUD_KMS_ENABLED", "false").lower() == "true":
+            try:
+                mk = SecurityUtils(use_kms=True).get_initialized_master_key()
+                return mk if mk else b""
+            except Exception as e:
+                logger.warning(
+                    "KMS root key unavailable for memory crypto; memory field encryption disabled: %s",
+                    e,
+                )
+                return b""
         encoded_key = get_env("SERVER_AES_MASTER_KEY_ENV") or get_env("SERVER_AES_MASTER_KEY")
         if not encoded_key:
             return b""
@@ -263,7 +275,7 @@ class MemoryEngineManager:
     def _embed_env() -> tuple[str, str, str]:
         name = clean_env_value("EMBED_MODEL_NAME")
         base = clean_env_value("EMBED_BASE_URL")
-        key = clean_env_value("EMBED_API_KEY")
+        key = resolve_secret_env("EMBED_API_KEY", "")
         return name, base, key
 
     @staticmethod

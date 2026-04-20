@@ -23,6 +23,13 @@ _APP_DIR = Path(__file__).resolve().parent
 if str(_APP_DIR) not in sys.path:
     sys.path.append(str(_APP_DIR))
 
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv(_APP_DIR / ".env", override=False)
+except ImportError:
+    pass
+
 from runtime_support.runtime_env_prepare import prepare_runtime_environment
 from runtime_support.error_logging import setup_error_file_logging
 
