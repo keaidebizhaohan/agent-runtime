@@ -12,18 +12,16 @@ requires-python = ">=3.11.4"
 # openjiuwen_studio：从 git 拉取 backend 子目录源码。
 dependencies = [
     "openjiuwen[chromadb,obs]>=0.1.9",
-    "openjiuwen_studio>=0.1.7",
-    "openjiuwen-runtime-service",
     "filelock>=3.13.0",
     "fastapi>=0.104.0",
     "uvicorn[standard]>=0.24.0",
     "pydantic>=2.5.0",
     "sse-starlette>=1.8.0",
     "python-dotenv>=1.2.1",
+    "openjiuwen_studio==0.1.7",
+    "openjiuwen-runtime-foundation==0.1.0",
+    "openjiuwen-runtime-service==0.1.0"
 ]
-
-[tool.uv.sources]
-openjiuwen-runtime-service = { path = "../../service", editable = true }
 
 [tool.uv]
 default-groups = ["dev"]

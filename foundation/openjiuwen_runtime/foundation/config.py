@@ -18,7 +18,6 @@ class Settings(BaseSettings):
     # --------------------------
     DB_TYPE: Literal["mysql", "sqlite"] = Field(default="sqlite", env="DB_TYPE")
 
-
     # --------------------------
     # 【MySQL 配置】（静态可选，DB_TYPE=mysql 时必选）
     # --------------------------
@@ -42,6 +41,7 @@ class Settings(BaseSettings):
     PORT: int = Field(default=8186, env="PORT")
     UV_EXTRA_ARGS: str = Field(default="", env="UV_EXTRA_ARGS")
     DEPLOY_TYPE: Literal["subprocess", "docker", "k8s"] = Field(default="subprocess", env="DEPLOY_TYPE")
+    MODE: Literal["dev", "product"] = Field(default="product", env="MODE")
 
     # ========================
     # 内置 对象

@@ -82,14 +82,14 @@ async def health():
 
 
 def prepare_subprocess_deployment(
-    mode: str,
+    deploy_type: str,
     port: int | None
 ) -> tuple[int, Path]:
     """
     预处理 subprocess 部署：分配端口、检查端口、获取 WHL 包路径
     返回：(最终使用的端口, whl文件路径)
     """
-    if mode != "subprocess":
+    if deploy_type != "subprocess":
         return 0, Path("")
 
     # 端口分配与验证
@@ -105,7 +105,11 @@ def prepare_subprocess_deployment(
         )
     logger.info(f"Port: {port}")
 
-    # 获取 WHL 包路径
+    # PyPI仓库安装模式
+    if settings.MODE == "product":
+        return port, Path("")
+
+    # 开发模式，本地源码部署: 获取 WHL 包路径
     logger.info(f"dist_path: {settings.dist_path}")
     whl_path = settings.dist_path / "lowcode_agent_runner-0.1.0-py3-none-any.whl"
     if not whl_path.exists():
