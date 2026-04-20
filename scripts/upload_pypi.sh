@@ -11,8 +11,23 @@ pip install twine==6.2.0
 
 PROJECT_DIR=${PWD}
 
-# 按依赖顺序构建
-for pkg_dir in foundation management service server applications/lowcode_agent
+# 默认全部构建目录
+DEFAULT_PKG_DIRS=(
+    foundation
+    management
+    service
+    server
+    applications/lowcode_agent
+)
+
+# 如果传入参数，则使用传入的目录
+if [ $# -gt 0 ]; then
+    PKG_DIRS=("$@")
+else
+    PKG_DIRS=("${DEFAULT_PKG_DIRS[@]}")
+fi
+
+for pkg_dir in "${PKG_DIRS[@]}"
 do
     cd "${PROJECT_DIR}/${pkg_dir}"
 
@@ -34,7 +49,6 @@ do
         *)
             ;;
     esac
-
 
     # 构建（去私有源拉包）
     uv sync \
