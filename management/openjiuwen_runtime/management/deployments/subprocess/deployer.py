@@ -141,18 +141,22 @@ class LocalSubprocessDeployer(Deployer[SubprocessParams]):
             venv_path = self.venv_manager.create_venv(deployment_id)
             logger.info("Virtual environment created: %s", venv_path)
 
-            # 获取所有 .whl 文件
-            logger.info("dist_path: %s", settings.dist_path)
-            whl_files = list(settings.dist_path.glob("*.whl"))
-            if not whl_files:
-                raise RuntimeError(f"No .whl files found in dist directory: {settings.dist_path}")
+            if settings.MODE == "dev":
+                # 开发模式，本地源码部署: 获取所有 .whl 文件
+                logger.info("dist_path: %s", settings.dist_path)
+                whl_files = list(settings.dist_path.glob("*.whl"))
+                if not whl_files:
+                    raise RuntimeError(f"No .whl files found in dist directory: {settings.dist_path}")
 
-            logger.info("whl_files: %s", whl_files)
+                logger.info("whl_files: %s", whl_files)
 
-            # 循环安装所有 whl 包
-            for whl_file in whl_files:
-                self.venv_manager.install_whl(deployment_id, str(whl_file))
-                logger.info("Installed WHL package: %s", whl_file)
+                # 循环安装所有 whl 包
+                for whl_file in whl_files:
+                    self.venv_manager.pip_install(deployment_id, str(whl_file))
+                    logger.info("Installed WHL package: %s", whl_file)
+            else:
+                # 从 PyPI仓库安装 lowcode-agent-runner
+                self.venv_manager.pip_install(deployment_id, "lowcode-agent-runner")
 
             # 获取虚拟环境Python解释器
             python_executable = self.venv_manager.get_python_executable(deployment_id)

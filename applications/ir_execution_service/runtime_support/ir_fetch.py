@@ -26,6 +26,7 @@ from fastapi import HTTPException
 from filelock import FileLock
 
 from runtime_support.http_response_contract import LowcodeApiResponseCode
+from runtime_support.studio_secrets import resolve_secret_env
 
 
 def _cache_max_files() -> int:
@@ -163,7 +164,12 @@ async def ensure_ir_local_path(ir_path: str) -> Path:
             except OSError:
                 pass
 
-        storage = AioBotoClient()
+        storage = AioBotoClient(
+            server=(os.environ.get("OBS_SERVER") or "").strip() or None,
+            access_key_id=resolve_secret_env("OBS_ACCESS_KEY_ID", ""),
+            secret_access_key=resolve_secret_env("OBS_SECRET_ACCESS_KEY", ""),
+            region_name=(os.environ.get("OBS_REGION") or "").strip() or None,
+        )
         ok = await storage.download_file(
             bucket_name=obs_bucket_name,
             object_name=object_key,

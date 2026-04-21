@@ -16,6 +16,7 @@ from typing import Any, AsyncIterator
 from dsl_workflow_dependency_loader import WorkflowLlmApiKeyMissingError
 from fastapi.exceptions import RequestValidationError
 from openjiuwen.core.runner import Runner
+from openjiuwen.core.context_engine.schema.config import ContextEngineConfig
 from openjiuwen_studio.schemas import ResponseModel
 
 from runtime_support.http_response_contract import (
@@ -28,10 +29,45 @@ from runtime_support.execution_request import ExecutionPrepareError, prepare_exe
 from runtime_support.runtime_bootstrap import ensure_runtime_ready
 
 from react_agent_builder import build_react_agent_from_ir
+from runtime_support.context_persistence import RedisContextPersistence
 
 from openjiuwen_runtime.foundation.log import get_logger
 
 _log = get_logger(__name__)
+_ctx_store = RedisContextPersistence()
+
+
+def _workflow_context_id(workflow: Any) -> str:
+    card = getattr(workflow, "card", None)
+    wf_id = getattr(card, "id", None) if card is not None else None
+    wf_ver = getattr(card, "version", None) if card is not None else None
+    if wf_id and wf_ver:
+        return f"{wf_id}_{wf_ver}"
+    if wf_id:
+        return str(wf_id)
+    return "workflow"
+
+
+async def _append_user_input_message_if_needed(context: Any, inputs_obj: Any) -> None:
+    from openjiuwen.core.foundation.llm import UserMessage
+    from openjiuwen.core.session import InteractiveInput
+
+    content: Any = None
+    if isinstance(inputs_obj, dict) and "query" in inputs_obj:
+        content = inputs_obj.get("query")
+    elif isinstance(inputs_obj, InteractiveInput) and inputs_obj.user_inputs:
+        content = list(inputs_obj.user_inputs.values())[-1]
+    if content is None:
+        return
+    try:
+        existing = context.get_messages() if hasattr(context, "get_messages") else []
+        if existing:
+            last = existing[-1]
+            if getattr(last, "role", None) == "user" and getattr(last, "content", None) == content:
+                return
+        await context.add_messages([UserMessage(role="user", content=content)])
+    except Exception:
+        _log.debug("append user input to context failed", exc_info=True)
 
 
 @asynccontextmanager
@@ -329,13 +365,51 @@ async def execute_stream_event_source(body: Any) -> AsyncIterator[str]:
             yield _stream_error_event(LowcodeApiResponseCode.IR_LOAD_FAILED, message=str(e))
             return
 
-        chunk_iterator = Runner.run_workflow_streaming(
-            workflow=workflow,
-            inputs=prepared.inputs_obj,
-            session=prepared.session_id,
-        )
-        async for line in _workflow_stream_event_source(chunk_iterator, prepared.timeout_seconds):
-            yield line
+        conversation_id = str(prepared.session_id or "")
+        context_id = _workflow_context_id(workflow)
+        had_interaction = False
+
+        from openjiuwen.core.common.constants.constant import INTERACTION
+        from openjiuwen.core.session.stream import OutputSchema
+
+        try:
+            async with _ctx_store.conversation_lock(conversation_id=conversation_id):
+                context = await _ctx_store.load_context(
+                    conversation_id=conversation_id,
+                    context_id=context_id,
+                    config=ContextEngineConfig(),
+                )
+                await _append_user_input_message_if_needed(context, prepared.inputs_obj)
+
+                async def _wrapped_chunks() -> AsyncIterator[Any]:
+                    nonlocal had_interaction
+                    inner = Runner.run_workflow_streaming(
+                        workflow=workflow,
+                        inputs=prepared.inputs_obj,
+                        session=prepared.session_id,
+                        context=context,
+                    )
+                    async for ch in inner:
+                        if isinstance(ch, OutputSchema) and ch.type == INTERACTION:
+                            had_interaction = True
+                            await _ctx_store.save_on_interaction(
+                                conversation_id=conversation_id,
+                                context_id=context_id,
+                                context=context,
+                            )
+                        yield ch
+
+                async for line in _workflow_stream_event_source(_wrapped_chunks(), prepared.timeout_seconds):
+                    yield line
+
+                if not had_interaction:
+                    await _ctx_store.delete(conversation_id=conversation_id, context_id=context_id)
+        except Exception as e:
+            _log.exception("workflow stream failed: %s", e)
+            if conversation_id:
+                await _ctx_store.delete(conversation_id=conversation_id, context_id=context_id)
+            # Keep existing error mapping behavior.
+            yield _stream_error_event(LowcodeApiResponseCode.INTERNAL_ERROR, message=str(e))
         return
 
     try:

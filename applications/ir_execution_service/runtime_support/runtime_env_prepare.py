@@ -169,11 +169,9 @@ def _collect_checkpointer_missing(missing: list[str]) -> None:
     disabled = _strip("CHECKPOINTER_DISABLED").lower() in {"1", "true", "yes", "on"}
     if disabled:
         return
-    if _strip("CHECKPOINTER_REDIS_URL"):
-        return
-    if _blank("REDIS_HOST") and _blank("REDIS_URL"):
+    if _blank("CHECKPOINTER_REDIS_URL") and _blank("REDIS_URL") and _blank("REDIS_HOST"):
         missing.append(
-            "未设置 CHECKPOINTER_DISABLED 且未设置 CHECKPOINTER_REDIS_URL 时，需要 REDIS_HOST 或 REDIS_URL 以供 Checkpointer"
+            "未设置 CHECKPOINTER_DISABLED 时，需要 CHECKPOINTER_REDIS_URL 或 REDIS_URL 或 REDIS_HOST（REDIS_* 拼装）以供 Checkpointer"
         )
 
 

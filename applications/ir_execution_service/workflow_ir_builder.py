@@ -7,16 +7,13 @@
 """
 从低码工作流 JSON 构建可执行的 openjiuwen.core.workflow.workflow.Workflow。
 
-支持两种输入：
-1. 画布 IR：nodes、edges、model_references、plugins。
-2. DSL 导出：components、connections，以及 dependencies.workflows 内嵌子工作流；
-   编译时通过 DependencyWorkflowLoader 按 id 解析子工作流，不查业务库。
+支持画布 IR（nodes、edges、model_references、plugins）与 DSL 导出（components、connections、
+dependencies.workflows 子工作流；子流由 DependencyWorkflowLoader 按 id 解析，不查业务库）。
 
 依赖 openjiuwen_studio 的 WorkflowBase、DSL 转换与 ExecutorWorkflow.compile。
-画布 IR 路径下 LLM、提问器、意图节点由 model_references 补全密钥与端点；插件由 plugins 预计算 plugin_tool_configs。
-当 api_key 为空时，按 base_url 生成 LLM_KEY__ 前缀的环境变量名，从进程环境变量读取。
-
-运行前需安装 openjiuwen 与 openjiuwen_studio 依赖。
+画布 IR 下 LLM、提问器、意图节点由 model_references 补全密钥与端点，插件由 plugins 预计算 plugin_tool_configs。
+api_key 为空时按 base_url 推导 LLM_KEY__ 环境变量名并从进程环境读取；model_references 与 DSL 内密文 api_key
+经 studio_secrets.decrypt_optional_secret 解密。需安装 openjiuwen 与 openjiuwen_studio。
 """
 
 from __future__ import annotations
@@ -84,6 +81,7 @@ from dsl_workflow_dependency_loader import (
 )
 
 from runtime_support.runtime_env import get_bool_env, resolve_llm_api_key_from_env
+from runtime_support.studio_secrets import decrypt_optional_secret
 
 # ---------------------------------------------------------------------------
 # 常量与路径
@@ -101,6 +99,9 @@ def inject_api_keys_into_model_references(model_references: Optional[Dict[str, A
             api_key = resolve_llm_api_key_from_env(base_url)
             if api_key:
                 cell["api_key"] = api_key
+        ak = str(cell.get("api_key") or "").strip()
+        if ak:
+            cell["api_key"] = decrypt_optional_secret(ak)
         out[str(key)] = cell
     return out
 
@@ -286,7 +287,7 @@ def _model_config_from_references(
         temp = float(pr.get("temperature", temp))
         top_p = float(pr.get("top_p", top_p))
     timeout = int(ref.get("timeout") or 60)
-    api_key = str(ref.get("api_key") or "").strip()
+    api_key = decrypt_optional_secret(str(ref.get("api_key") or "").strip())
     base_url = str(ref.get("base_url") or "").strip()
     provider = str(ref.get("provider") or ref.get("model_provider") or "openai")
     model_name = canvas_model_type or str(ref.get("model_type") or ref.get("name") or "")
