@@ -14,11 +14,13 @@ from typing import Any
 from fastapi.responses import JSONResponse
 
 from openjiuwen.core.runner import Runner
+from openjiuwen.core.context_engine.schema.config import ContextEngineConfig
 from openjiuwen_runtime.foundation.log import get_logger
 from openjiuwen_studio.schemas import ResponseModel
 
 from dsl_workflow_dependency_loader import WorkflowLlmApiKeyMissingError
 from react_agent_builder import build_react_agent_from_ir
+from runtime_support.context_persistence import RedisContextPersistence
 from runtime_support.http_response_contract import (
     LowcodeApiResponseCode,
     ResponseDataType,
@@ -31,6 +33,42 @@ from runtime_support.runtime_bootstrap import ensure_runtime_ready
 JSON_MEDIA_TYPE = "application/json; charset=utf-8"
 
 _log = get_logger(__name__)
+
+_ctx_store = RedisContextPersistence()
+
+
+def _workflow_context_id(workflow: Any) -> str:
+    """Stable context_id for (workflow, version)."""
+    card = getattr(workflow, "card", None)
+    wf_id = getattr(card, "id", None) if card is not None else None
+    wf_ver = getattr(card, "version", None) if card is not None else None
+    if wf_id and wf_ver:
+        return f"{wf_id}_{wf_ver}"
+    if wf_id:
+        return str(wf_id)
+    return "workflow"
+
+
+async def _append_user_input_message_if_needed(context: Any, inputs_obj: Any) -> None:
+    """Append current user input into context (best-effort)."""
+    from openjiuwen.core.foundation.llm import UserMessage
+    from openjiuwen.core.session import InteractiveInput
+
+    content: Any = None
+    if isinstance(inputs_obj, dict):
+        if "query" in inputs_obj:
+            content = inputs_obj.get("query")
+    elif isinstance(inputs_obj, InteractiveInput):
+        if inputs_obj.user_inputs:
+            content = list(inputs_obj.user_inputs.values())[-1]
+
+    if content is None:
+        return
+
+    try:
+        await context.add_messages([UserMessage(role="user", content=content)])
+    except Exception:
+        _log.debug("append user input to context failed", exc_info=True)
 
 
 def _json_response(model: ResponseModel) -> JSONResponse:
@@ -196,6 +234,7 @@ async def handle_execute_invoke(body: Any) -> JSONResponse:
 
     if prepared.executable_kind == "workflow":
         from workflow_ir_builder import build_core_workflow_from_ir_file
+        from openjiuwen.core.workflow import WorkflowExecutionState, WorkflowOutput
 
         try:
             workflow = await build_core_workflow_from_ir_file(
@@ -209,13 +248,40 @@ async def handle_execute_invoke(body: Any) -> JSONResponse:
         except Exception as e:
             return _json_response(build_error_response_model(LowcodeApiResponseCode.IR_LOAD_FAILED, message=str(e)))
 
+        conversation_id = str(prepared.session_id or "")
+        context_id = _workflow_context_id(workflow)
+
         try:
-            wf_output = await asyncio.wait_for(
-                Runner.run_workflow(workflow=workflow, inputs=prepared.inputs_obj, session=prepared.session_id),
-                timeout=prepared.timeout_seconds,
-            )
+            async with _ctx_store.conversation_lock(conversation_id=conversation_id):
+                context = await _ctx_store.load_context(
+                    conversation_id=conversation_id,
+                    context_id=context_id,
+                    config=ContextEngineConfig(),
+                )
+                await _append_user_input_message_if_needed(context, prepared.inputs_obj)
+
+                wf_output = await asyncio.wait_for(
+                    Runner.run_workflow(
+                        workflow=workflow,
+                        inputs=prepared.inputs_obj,
+                        session=prepared.session_id,
+                        context=context,
+                    ),
+                    timeout=prepared.timeout_seconds,
+                )
+
+                if isinstance(wf_output, WorkflowOutput) and wf_output.state == WorkflowExecutionState.INPUT_REQUIRED:
+                    await _ctx_store.save_on_interaction(
+                        conversation_id=conversation_id,
+                        context_id=context_id,
+                        context=context,
+                    )
+                else:
+                    await _ctx_store.delete(conversation_id=conversation_id, context_id=context_id)
         except Exception as e:
             _log.exception("workflow invoke failed: %s", e)
+            if conversation_id:
+                await _ctx_store.delete(conversation_id=conversation_id, context_id=context_id)
             return _json_response(_invoke_exception_to_model(e))
 
         return _json_response(_workflow_invoke_result_to_model(wf_output))

@@ -37,7 +37,7 @@ url = "https://mirrors.aliyun.com/pypi/simple/"
 
 [tool.setuptools.packages.find]
 where = ["."]
-exclude = ["*.egg-info", "test_script", "ir_for_test", "logs"]
+exclude = ["*.egg-info", "test_script", "ir_for_test", "logs", "test"]
 include = ["runtime_support*"]
 
 [tool.setuptools]
