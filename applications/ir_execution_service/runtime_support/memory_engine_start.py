@@ -1,12 +1,12 @@
 # coding: utf-8
 # Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
 
-# Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved.
-
 """LongTermMemory 单例：向量存储、Embedding、作用域配置，从进程环境变量读取。
 
 关系型库连接与 openjiuwen_studio.ops.config.Settings 一致：DB_TYPE、DB_HOST、DB_PORT、DB_USER、DB_PASSWORD，
 库名使用 AGENT_DB_NAME（MySQL 连接串中的 database 段即该库名）。表名由 ORM/迁移在库内创建，不会出现在 URL 里。
+当 DB_TYPE 为 gaussdb/opengauss 时，会先生成同步 DSN，再切换为自定义 SQLAlchemy 方言
+gaussdb+async_gaussdb://...，底层驱动使用 async-gaussdb。
 """
 
 from __future__ import annotations
@@ -51,6 +51,13 @@ def get_database_url() -> str:
             f"mysql+pymysql://{user}:{password}@"
             f"{host}:{port}/{database}?charset=utf8mb4"
         )
+    if db_type in {"gaussdb", "opengauss"}:
+        user = quote(get_env("DB_USER", "root"), safe="")
+        password = quote(get_env("DB_PASSWORD", ""), safe="")
+        host = get_env("DB_HOST", "localhost")
+        port = get_int_env("DB_PORT", 5432)
+        database = get_env("AGENT_DB_NAME", "openjiuwen_agent")
+        return f"gaussdb://{user}:{password}@{host}:{port}/{database}"
     if db_type == "sqlite":
         db_path = Path(get_env("SQLITE_DB_PATH", "data/databases"))
         db_path.mkdir(parents=True, exist_ok=True)
@@ -61,6 +68,12 @@ def get_database_url() -> str:
 def get_async_database_url(sync_db_url: str) -> str:
     if "mysql+pymysql" in sync_db_url:
         return sync_db_url.replace("pymysql", "aiomysql")
+    if sync_db_url.startswith("gaussdb://"):
+        from .gaussdb_sqlalchemy_dialect import ensure_async_gaussdb_installed, ensure_gaussdb_dialect_registered
+
+        ensure_async_gaussdb_installed()
+        ensure_gaussdb_dialect_registered()
+        return sync_db_url.replace("gaussdb://", "gaussdb+async_gaussdb://", 1)
     if sync_db_url.startswith("sqlite:///"):
         return sync_db_url.replace("sqlite:///", "sqlite+aiosqlite:///")
     raise ValueError(f"Unsupported database URL for async engine: {sync_db_url}")

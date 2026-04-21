@@ -37,6 +37,13 @@ set -a                  # Automatically export all variables
 source ${ENV_FILE}      # Load environment variables from file
 set +a                  # Disable automatic export
 
+FOUNDATION_INSTALL_TARGET="../foundation"
+DB_TYPE_NORMALIZED="$(echo "${DB_TYPE:-}" | tr '[:upper:]' '[:lower:]')"
+if [[ "${DB_TYPE_NORMALIZED}" == "gaussdb" || "${DB_TYPE_NORMALIZED}" == "opengauss" ]]; then
+    FOUNDATION_INSTALL_TARGET="../foundation[gaussdb]"
+    echo "Detected DB_TYPE=${DB_TYPE}; install foundation with [gaussdb] optional dependency."
+fi
+
 if [[ "$OSTYPE" == "darwin"* ]]; then
     SED_I_FLAG="-i ''"
 else
@@ -108,6 +115,6 @@ else
     source .venv/bin/activate
 fi
 uv pip install -e ../management ${UV_EXTRA_ARGS}
-uv pip install -e ../foundation ${UV_EXTRA_ARGS}
+uv pip install -e "${FOUNDATION_INSTALL_TARGET}" ${UV_EXTRA_ARGS}
 
 python -m openjiuwen_runtime.server.main 2>&1 | tee server.log

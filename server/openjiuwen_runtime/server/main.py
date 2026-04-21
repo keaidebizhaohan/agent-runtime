@@ -45,8 +45,14 @@ if settings.DB_TYPE == "sqlite":
     db_handler = SQLiteHandler("deployments.db")
 elif settings.DB_TYPE == "mysql":
     db_handler = MySQLHandler()
+elif settings.DB_TYPE in {"gaussdb", "opengauss"}:
+    from openjiuwen_runtime.foundation.db.gaussdb_handler import GaussDBHandler
+
+    db_handler = GaussDBHandler()
 else:
-    raise ValueError(f"Unsupported DB_TYPE: {settings.DB_TYPE}. Use 'sqlite' or 'mysql'.")
+    raise ValueError(
+        f"Unsupported DB_TYPE: {settings.DB_TYPE}. Use 'sqlite', 'mysql', 'gaussdb', or 'opengauss'."
+    )
 
 manager = DeploymentManager(db_handler)
 

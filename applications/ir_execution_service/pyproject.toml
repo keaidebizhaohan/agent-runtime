@@ -22,6 +22,11 @@ dependencies = [
     "python-dotenv>=1.2.1",
 ]
 
+[project.optional-dependencies]
+gaussdb = [
+    "async-gaussdb>=0.30.4",
+]
+
 [tool.uv.sources]
 openjiuwen-runtime-service = { path = "../../service", editable = true }
 
