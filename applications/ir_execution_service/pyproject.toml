@@ -23,6 +23,14 @@ dependencies = [
     "openjiuwen-runtime-service==0.1.0"
 ]
 
+[project.optional-dependencies]
+gaussdb = [
+    "async-gaussdb>=0.30.4",
+]
+
+[tool.uv.sources]
+openjiuwen-runtime-service = { path = "../../service", editable = true }
+
 [tool.uv]
 default-groups = ["dev"]
 

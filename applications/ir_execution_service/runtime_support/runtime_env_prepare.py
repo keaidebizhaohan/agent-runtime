@@ -1,8 +1,6 @@
 # coding: utf-8
 # Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
 
-# Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved.
-
 """启动前环境准备：不为进程加载 .env 文件，仅根据类型键写入默认并校验必填项。
 
 外部部署请自行 export 或注入环境变量；仓库内 .env 仅作样例参考。
@@ -55,6 +53,8 @@ def apply_runtime_type_and_optional_defaults() -> None:
     db_type = _strip("DB_TYPE", "mysql").lower()
     if db_type == "mysql":
         _setdefault_env("DB_PORT", "3306")
+    elif db_type in {"gaussdb", "opengauss"}:
+        _setdefault_env("DB_PORT", "5432")
     elif db_type == "sqlite":
         _setdefault_env("SQLITE_DB_PATH", "data/databases")
         _setdefault_env("OPS_SQLITE_DB", "ops.db")
@@ -113,7 +113,7 @@ def _collect_code_sandbox_missing(missing: list[str]) -> None:
 def _collect_db_missing(missing: list[str]) -> None:
     """与 openjiuwen_studio.ops.config.Settings 一致：DB 连接项、OPS_DB_NAME、AGENT_DB_NAME、SQLite 路径与文件名。"""
     db_type = _strip("DB_TYPE").lower()
-    if db_type == "mysql":
+    if db_type in {"mysql", "gaussdb", "opengauss"}:
         for key in ("DB_HOST", "DB_PORT", "DB_USER", "OPS_DB_NAME", "AGENT_DB_NAME"):
             if not _strip(key):
                 missing.append(key)
@@ -124,7 +124,7 @@ def _collect_db_missing(missing: list[str]) -> None:
             if not _strip(key):
                 missing.append(key)
     else:
-        missing.append(f"DB_TYPE 非法: {db_type!r}，应为 mysql 或 sqlite")
+        missing.append(f"DB_TYPE 非法: {db_type!r}，应为 mysql、sqlite、gaussdb 或 opengauss")
 
 
 def _collect_kv_missing(missing: list[str]) -> None:
