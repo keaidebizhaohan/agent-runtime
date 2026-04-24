@@ -72,8 +72,8 @@ class IrExecutionServiceApp(BaseApp):
     def __init__(self) -> None:
         super().__init__(
             app_name="IrExecutionService",
-            app_description="IR JSON -> ReActAgent or Workflow, Runner + memory/checkpointer",
-            version="0.1.0",
+            app_description="面向低代码的工作流 IR 执行 HTTP 服务",
+            version="0.1.1",
         )
 
         @self.app.exception_handler(RequestValidationError)
