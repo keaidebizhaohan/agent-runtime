@@ -10,7 +10,6 @@
 from __future__ import annotations
 
 import os
-import sys
 from pathlib import Path
 
 from fastapi.exceptions import RequestValidationError
@@ -20,18 +19,20 @@ from sse_starlette import EventSourceResponse
 from starlette.requests import Request
 
 _APP_DIR = Path(__file__).resolve().parent
-if str(_APP_DIR) not in sys.path:
-    sys.path.append(str(_APP_DIR))
+_APP_ROOT = _APP_DIR.parent
 
 try:
     from dotenv import load_dotenv
 
-    load_dotenv(_APP_DIR / ".env", override=False)
+    load_dotenv(_APP_ROOT / ".env", override=False)
 except ImportError:
     pass
 
-from runtime_support.runtime_env_prepare import prepare_runtime_environment
-from runtime_support.error_logging import setup_error_file_logging
+from openjiuwen.core.runner import Runner
+from openjiuwen_runtime.service.app.base_app import BaseApp
+
+from .runtime_support.runtime_env_prepare import prepare_runtime_environment
+from .runtime_support.error_logging import setup_error_file_logging
 
 prepare_runtime_environment()
 setup_error_file_logging()
@@ -39,11 +40,8 @@ setup_error_file_logging()
 # Workflow 默认超时较短，复杂 DSL 续跑时容易误判超时。
 os.environ.setdefault("WORKFLOW_EXECUTE_TIMEOUT", "300")
 
-from openjiuwen.core.runner import Runner
-from openjiuwen_runtime.service.app.base_app import BaseApp
-
-from runtime_support.http_response_contract import LowcodeApiResponseCode, build_error_response_model
-from runtime_support.runtime_bootstrap import ensure_runtime_ready
+from .runtime_support.http_response_contract import LowcodeApiResponseCode, build_error_response_model
+from .runtime_support.runtime_bootstrap import ensure_runtime_ready
 
 _JSON_MEDIA_TYPE = "application/json; charset=utf-8"
 
@@ -82,7 +80,7 @@ class IrExecutionServiceApp(BaseApp):
         async def _validation_on_stream_routes(request: Request, exc: RequestValidationError):
             path = (request.url.path or "").rstrip("/")
             if path.endswith("/execute_stream"):
-                from stream_api import validation_error_stream_events
+                from .stream_api import validation_error_stream_events
 
                 return EventSourceResponse(validation_error_stream_events(exc))
             if path.endswith("/execute_invoke"):
@@ -91,13 +89,13 @@ class IrExecutionServiceApp(BaseApp):
 
         @self.app.post("/execute_stream")
         async def execute_stream(body: IrQueryBody):
-            from stream_api import execute_stream_event_source
+            from .stream_api import execute_stream_event_source
 
             return EventSourceResponse(execute_stream_event_source(body))
 
         @self.app.post("/execute_invoke")
         async def execute_invoke(body: IrQueryBody):
-            from invoke_api import handle_execute_invoke
+            from .invoke_api import handle_execute_invoke
 
             return await handle_execute_invoke(body)
 

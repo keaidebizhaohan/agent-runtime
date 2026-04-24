@@ -18,7 +18,8 @@ from urllib.parse import urlparse
 
 from .studio_secrets import resolve_secret_env
 
-_APP_ROOT = Path(__file__).resolve().parent.parent
+# Service root: .../applications/ir_execution_service
+_APP_ROOT = Path(__file__).resolve().parent.parent.parent
 ENV_FILE_PATH = _APP_ROOT / ".env"
 
 LLM_API_KEY_ENV_PREFIX = "LLM_KEY__"

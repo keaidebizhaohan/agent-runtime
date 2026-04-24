@@ -48,7 +48,7 @@ do
             ;;
         applications/ir_execution_service)
             sed -i 's/"openjiuwen-runtime-foundation==.*"/"openjiuwen-runtime-foundation=='"${VERSION}"'"/' pyproject.toml
-            sed -i 's/"openjiuwen-runtime-service==.*"/"openjiuwen-runtime-service=='"${VERSION}"'"/' pyproject.tom
+            sed -i 's/"openjiuwen-runtime-service==.*"/"openjiuwen-runtime-service=='"${VERSION}"'"/' pyproject.toml
             ;;
         *)
             ;;

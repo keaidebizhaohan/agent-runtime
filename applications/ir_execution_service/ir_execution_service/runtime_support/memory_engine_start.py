@@ -17,7 +17,9 @@ import os
 from pathlib import Path
 from urllib.parse import quote
 
-from openjiuwen.core.common.logging import logger
+from openjiuwen_runtime.foundation.log import get_logger
+
+_log = get_logger(__name__)
 from openjiuwen.core.foundation.llm import ModelClientConfig, ModelRequestConfig
 from openjiuwen.core.foundation.store import DbBasedKVStore, DefaultDbStore, create_vector_store
 from openjiuwen.core.memory import LongTermMemory, MemoryEngineConfig
@@ -38,7 +40,8 @@ from .runtime_env import (
 from .runtime_env_prepare import prepare_runtime_environment
 from .studio_secrets import resolve_secret_env
 
-_APP_ROOT = Path(__file__).resolve().parent.parent
+# Service root: .../applications/ir_execution_service
+_APP_ROOT = Path(__file__).resolve().parent.parent.parent
 
 
 def get_database_url() -> str:
@@ -139,7 +142,7 @@ class MemoryEngineManager:
             api_key=api_key,
         )
         cls._instance = memory_engine
-        logger.info("Memory engine ready (env validated)")
+        _log.info("Memory engine ready (env validated)")
         return cls._instance
 
     @classmethod
@@ -180,12 +183,12 @@ class MemoryEngineManager:
         if kv_type == "inmemory":
             from openjiuwen.core.foundation.store import InMemoryKVStore
 
-            logger.info("Memory engine KV: InMemoryKVStore")
+            _log.info("Memory engine KV: InMemoryKVStore")
             return InMemoryKVStore()
         if kv_type == "redis":
             return MemoryEngineManager._create_redis_kv_store()
         if kv_type in ("db", "sql", "sqlite", "mysql"):
-            logger.info("Memory engine KV: DbBasedKVStore (same DSN as DB_TYPE)")
+            _log.info("Memory engine KV: DbBasedKVStore (same DSN as DB_TYPE)")
             return DbBasedKVStore(
                 create_async_engine(async_database_url, pool_pre_ping=True, echo=False)
             )
@@ -215,7 +218,7 @@ class MemoryEngineManager:
         url = clean_env_value("REDIS_URL")
         if not url:
             url = MemoryEngineManager.build_redis_url()
-        logger.info(
+        _log.info(
             "Memory engine KV: RedisStore (%s)",
             url.split("@")[-1] if "@" in url else url,
         )
@@ -249,7 +252,7 @@ class MemoryEngineManager:
                 f"http://{get_env('MILVUS_HOST', 'localhost')}:"
                 f"{get_int_env('MILVUS_PORT', 19530)}"
             )
-            logger.info("Creating Milvus vector store for memory engine")
+            _log.info("Creating Milvus vector store for memory engine")
             return create_vector_store(
                 store_type="milvus",
                 milvus_uri=milvus_uri,
@@ -257,7 +260,7 @@ class MemoryEngineManager:
                 alias="memory_milvus_connection",
             )
         if index_manager_type == "chroma":
-            logger.info("Creating Chroma vector store for memory engine")
+            _log.info("Creating Chroma vector store for memory engine")
             return create_vector_store("chroma", persist_directory=str(data_dir))
         raise ValueError(
             f"Unknown vector db type: {index_manager_type!r}; expected 'chroma' or 'milvus'."
@@ -270,7 +273,7 @@ class MemoryEngineManager:
                 mk = SecurityUtils(use_kms=True).get_initialized_master_key()
                 return mk if mk else b""
             except Exception as e:
-                logger.warning(
+                _log.warning(
                     "KMS root key unavailable for memory crypto; memory field encryption disabled: %s",
                     e,
                 )
@@ -281,7 +284,7 @@ class MemoryEngineManager:
         try:
             return base64.b64decode(encoded_key)
         except binascii.Error:
-            logger.warning("Invalid SERVER_AES master key value; memory encryption disabled.")
+            _log.warning("Invalid SERVER_AES master key value; memory encryption disabled.")
             return b""
 
     @staticmethod

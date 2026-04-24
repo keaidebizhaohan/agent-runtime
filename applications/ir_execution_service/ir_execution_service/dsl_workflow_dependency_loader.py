@@ -20,9 +20,9 @@ from openjiuwen_studio.core.common import dsl as studio_dsl
 from openjiuwen_studio.core.executor.workflow.context import Context
 from openjiuwen_studio.core.executor.workflow.workflow import IWorkflowLoader, Workflow as ExecutorWorkflow
 
-from runtime_support.http_response_contract import LowcodeApiResponseCode
-from runtime_support.runtime_env import llm_api_key_env_var_name, resolve_llm_api_key_from_env
-from runtime_support.studio_secrets import decrypt_optional_secret
+from .runtime_support.http_response_contract import LowcodeApiResponseCode
+from .runtime_support.runtime_env import llm_api_key_env_var_name, resolve_llm_api_key_from_env
+from .runtime_support.studio_secrets import decrypt_optional_secret
 
 
 WorkflowKey = Tuple[str, str]

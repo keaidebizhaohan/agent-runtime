@@ -9,12 +9,14 @@ from __future__ import annotations
 
 import asyncio
 
-from openjiuwen.core.common.logging import logger
 from openjiuwen.core.session.checkpointer.checkpointer import CheckpointerConfig, CheckpointerFactory
+from openjiuwen_runtime.foundation.log import get_logger
 
 from .memory_engine_start import MemoryEngineManager
 from .runtime_env import clean_env_value, get_bool_env, get_int_env
 from .runtime_env_prepare import prepare_runtime_environment
+
+_log = get_logger(__name__)
 
 _runtime_ready = False
 _runtime_lock = asyncio.Lock()
@@ -26,12 +28,13 @@ async def init_redis_checkpointer() -> None:
     if _checkpointer_initialized:
         return
     if get_bool_env("CHECKPOINTER_DISABLED", False):
-        logger.info("Checkpointer: CHECKPOINTER_DISABLED set, using SDK default (in-memory).")
+        _log.info("Checkpointer: CHECKPOINTER_DISABLED set, using SDK default (in-memory).")
         _checkpointer_initialized = True
         return
 
     import openjiuwen.extensions.checkpointer.redis.checkpointer  # noqa: F401
 
+    # 与启动校验及 MemoryEngine KV 侧约定一致：显式 URL 优先，其次回退到 REDIS_* 拼装
     url = clean_env_value("CHECKPOINTER_REDIS_URL") or clean_env_value("REDIS_URL")
     if not url:
         url = MemoryEngineManager.build_redis_url()
@@ -47,7 +50,7 @@ async def init_redis_checkpointer() -> None:
     cp = await CheckpointerFactory.create(CheckpointerConfig(type="redis", conf=conf))
     CheckpointerFactory.set_default_checkpointer(cp)
     safe = url.split("@")[-1] if "@" in url else url
-    logger.info("Checkpointer: Redis default set (url tail %s).", safe)
+    _log.info("Checkpointer: Redis default set (url tail %s).", safe)
     _checkpointer_initialized = True
 
 

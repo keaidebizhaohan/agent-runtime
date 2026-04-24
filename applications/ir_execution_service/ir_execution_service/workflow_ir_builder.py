@@ -27,7 +27,6 @@ from pydantic import ValidationError
 
 _APP_DIR = Path(__file__).resolve().parent
 
-from openjiuwen.core.common.logging import logger
 from openjiuwen_studio.core.common import dsl as studio_dsl
 from openjiuwen_studio.core.common.exceptions import JiuWenComponentException
 from openjiuwen_studio.core.common.status_code import StatusCode
@@ -71,8 +70,9 @@ from openjiuwen_studio.core.manager.utils.utils import convert_to_properties_for
 from openjiuwen_studio.core.utils.exception import log_exception
 from openjiuwen_studio.schemas.node import BaseValue, Node
 from openjiuwen_studio.schemas.workflow import WorkflowBase
+from openjiuwen_runtime.foundation.log import get_logger
 
-from dsl_workflow_dependency_loader import (
+from .dsl_workflow_dependency_loader import (
     DependencyWorkflowLoader,
     collect_workflow_registry,
     unwrap_workflow_document,
@@ -80,8 +80,10 @@ from dsl_workflow_dependency_loader import (
     looks_like_dsl_workflow_export,
 )
 
-from runtime_support.runtime_env import get_bool_env, resolve_llm_api_key_from_env
-from runtime_support.studio_secrets import decrypt_optional_secret
+from .runtime_support.runtime_env import get_bool_env, resolve_llm_api_key_from_env
+from .runtime_support.studio_secrets import decrypt_optional_secret
+
+_log = get_logger(__name__)
 
 # ---------------------------------------------------------------------------
 # 常量与路径
@@ -581,7 +583,7 @@ def component_convert_for_export(
                 converter = converters.get(node_type)
                 if not converter:
                     msg = f"不支持的画布组件类型: {node_type}"
-                    logger.error(msg)
+                    _log.error(msg)
                     raise JiuWenComponentException(
                         code=StatusCode.COMPONENT_CONVERT_FAILED.code,
                         message=StatusCode.COMPONENT_CONVERT_FAILED.errmsg.format(msg=msg),

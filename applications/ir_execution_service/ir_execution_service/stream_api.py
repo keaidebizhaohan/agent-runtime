@@ -13,25 +13,23 @@ import os
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator
 
-from dsl_workflow_dependency_loader import WorkflowLlmApiKeyMissingError
 from fastapi.exceptions import RequestValidationError
-from openjiuwen.core.runner import Runner
 from openjiuwen.core.context_engine.schema.config import ContextEngineConfig
+from openjiuwen.core.runner import Runner
+from openjiuwen_runtime.foundation.log import get_logger
 from openjiuwen_studio.schemas import ResponseModel
 
-from runtime_support.http_response_contract import (
+from .dsl_workflow_dependency_loader import WorkflowLlmApiKeyMissingError
+from .react_agent_builder import build_react_agent_from_ir
+from .runtime_support.context_persistence import RedisContextPersistence
+from .runtime_support.execution_request import ExecutionPrepareError, prepare_execution_request
+from .runtime_support.http_response_contract import (
     LowcodeApiResponseCode,
     ResponseDataType,
     build_error_response_model,
     to_jsonable,
 )
-from runtime_support.execution_request import ExecutionPrepareError, prepare_execution_request
-from runtime_support.runtime_bootstrap import ensure_runtime_ready
-
-from react_agent_builder import build_react_agent_from_ir
-from runtime_support.context_persistence import RedisContextPersistence
-
-from openjiuwen_runtime.foundation.log import get_logger
+from .runtime_support.runtime_bootstrap import ensure_runtime_ready
 
 _log = get_logger(__name__)
 _ctx_store = RedisContextPersistence()
@@ -351,7 +349,7 @@ async def execute_stream_event_source(body: Any) -> AsyncIterator[str]:
 
     if prepared.executable_kind == "workflow":
         try:
-            from workflow_ir_builder import build_core_workflow_from_ir_file
+            from .workflow_ir_builder import build_core_workflow_from_ir_file
 
             workflow = await build_core_workflow_from_ir_file(
                 prepared.ir_local_json_path,

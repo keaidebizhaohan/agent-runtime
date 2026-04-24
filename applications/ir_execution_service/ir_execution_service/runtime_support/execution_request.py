@@ -2,8 +2,6 @@
 # coding: utf-8
 # Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
 
-# -*- coding: utf-8 -*-
-
 from __future__ import annotations
 
 import json
@@ -14,8 +12,8 @@ from typing import Any
 
 from fastapi import HTTPException
 
-from runtime_support.http_response_contract import LowcodeApiResponseCode
-from runtime_support.ir_fetch import (
+from .http_response_contract import LowcodeApiResponseCode
+from .ir_fetch import (
     detect_executable_kind,
     ensure_ir_local_path,
     lowcode_code_from_http_exception,
@@ -177,3 +175,4 @@ async def prepare_execution_request(body: Any) -> PreparedExecutionRequest:
         session_id=getattr(body, "conversation_id"),
         timeout_seconds=getattr(body, "timeout_ms") / 1000.0,
     )
+

@@ -5,8 +5,10 @@ from __future__ import annotations
 
 import os
 
-from openjiuwen.core.common.logging import logger
 from openjiuwen_studio.core.manager.model_manager.utils.security_utils import SecurityUtils
+from openjiuwen_runtime.foundation.log import get_logger
+
+_log = get_logger(__name__)
 
 
 def decrypt_optional_secret(raw: str) -> str:
@@ -38,7 +40,7 @@ def resolve_secret_env(env_key: str, default: str = "") -> str:
         except Exception as e:
             if fail_fast:
                 raise
-            logger.warning(
+            _log.warning(
                 "KMS decrypt failed for env %s, falling back to default: %s", env_key, e
             )
             return default if default is not None else ""

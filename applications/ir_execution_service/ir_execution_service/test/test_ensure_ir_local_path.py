@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-import sys
 import tempfile
 from pathlib import Path
 
@@ -29,10 +28,8 @@ from openjiuwen_runtime.foundation.log import get_logger
 _LOG = get_logger(__name__)
 
 _SERVICE_ROOT = Path(__file__).resolve().parent.parent
-if str(_SERVICE_ROOT) not in sys.path:
-    sys.path.append(str(_SERVICE_ROOT))
 
-from runtime_support.ir_fetch import ensure_ir_local_path
+from ..runtime_support.ir_fetch import ensure_ir_local_path
 
 
 def _load_dotenv_optional() -> None:

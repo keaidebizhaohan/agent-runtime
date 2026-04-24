@@ -25,8 +25,8 @@ from typing import Any
 from fastapi import HTTPException
 from filelock import FileLock
 
-from runtime_support.http_response_contract import LowcodeApiResponseCode
-from runtime_support.studio_secrets import resolve_secret_env
+from .http_response_contract import LowcodeApiResponseCode
+from .studio_secrets import resolve_secret_env
 
 
 def _cache_max_files() -> int:
@@ -78,7 +78,7 @@ def _evict_cache_if_needed(cache_root: Path, max_files: int) -> None:
 
 def detect_executable_kind(ir_root: dict[str, Any]) -> str:
     """根据 IR JSON 区分 workflow 与 agent。"""
-    from dsl_workflow_dependency_loader import looks_like_dsl_workflow_export, unwrap_workflow_document
+    from ..dsl_workflow_dependency_loader import looks_like_dsl_workflow_export, unwrap_workflow_document
 
     if not isinstance(ir_root, dict):
         raise HTTPException(status_code=400, detail="IR root must be a JSON object")

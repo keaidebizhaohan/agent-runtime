@@ -20,14 +20,14 @@ from openjiuwen_studio.lowcode.compiler import AgentCompiler
 from openjiuwen_studio.lowcode.config_adapter import ConfigAdapter
 from openjiuwen_studio.lowcode.schemas import ModelOverride
 
-from runtime_support.runtime_env import (
+from .runtime_support.runtime_env import (
     clean_env_value,
     get_bool_env,
     get_env,
     resolve_llm_api_key_from_env,
     resolve_memory_scope_id,
 )
-from runtime_support.studio_secrets import decrypt_optional_secret, resolve_secret_env
+from .runtime_support.studio_secrets import decrypt_optional_secret, resolve_secret_env
 
 
 def build_model_overrides_from_default_llm_env(export_data: dict[str, Any]) -> dict[str, ModelOverride]:

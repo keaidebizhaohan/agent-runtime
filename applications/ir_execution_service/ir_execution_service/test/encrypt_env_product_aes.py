@@ -22,11 +22,13 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-_SERVICE_ROOT = Path(__file__).resolve().parent.parent
+_SERVICE_ROOT = Path(__file__).resolve().parent.parent.parent
 
 
 class _StdoutStderrHandler(logging.Handler):
     """INFO 走 stdout（等同原先无 file= 的 print），ERROR 走 stderr。"""
+
+    terminator = "\n"
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
@@ -41,14 +43,15 @@ class _StdoutStderrHandler(logging.Handler):
 
 # 与 ir 应用 resolve_secret_env / decrypt 路径一致
 _SECRET_KEYS = (
-    "DB_PASSWORD",
-    "REDIS_PASSWORD",
-    "MILVUS_TOKEN",
-    "MILVUS_PASSWORD",
-    "DEFAULT_LLM_API_KEY",
-    "EMBED_API_KEY",
-    "OBS_ACCESS_KEY_ID",
-    "OBS_SECRET_ACCESS_KEY",
+    # "DB_PASSWORD",
+    # "REDIS_PASSWORD",
+    # "MILVUS_TOKEN",
+    # "MILVUS_PASSWORD",
+    # "DEFAULT_LLM_API_KEY",
+    # "EMBED_API_KEY",
+    # "OBS_ACCESS_KEY_ID",
+    # "OBS_SECRET_ACCESS_KEY",
+    "TAVILY_API_KEY"
 )
 
 
@@ -71,7 +74,6 @@ def _load_plain_map(env_path: Path) -> dict[str, str]:
 def _rewrite_env_file(
     env_path: Path,
     replacements: dict[str, str],
-    master_b64: str,
 ) -> None:
     text = env_path.read_text(encoding="utf-8")
     raw_lines = text.splitlines(keepends=True)
@@ -83,15 +85,6 @@ def _rewrite_env_file(
             new_lines.append(core + "\n")
             continue
         key = m.group(2)
-        if key == "SERVICE_MODE":
-            new_lines.append("SERVICE_MODE=product\n")
-            continue
-        if key == "SERVER_AES_MASTER_KEY":
-            new_lines.append("SERVER_AES_MASTER_KEY=\n")
-            continue
-        if key == "SERVER_AES_MASTER_KEY_ENV":
-            new_lines.append(f"SERVER_AES_MASTER_KEY_ENV={master_b64}\n")
-            continue
         if key in replacements:
             val = replacements[key]
             new_lines.append(f"{key}={val}\n")
@@ -99,11 +92,6 @@ def _rewrite_env_file(
         new_lines.append(core + "\n")
 
     body = "".join(new_lines)
-    if "SERVICE_MODE=" not in body:
-        insert = f"SERVICE_MODE=product\nSERVER_AES_MASTER_KEY=\nSERVER_AES_MASTER_KEY_ENV={master_b64}\n"
-        body = insert + body
-    if "SERVER_AES_MASTER_KEY_ENV=" not in body:
-        body = f"SERVER_AES_MASTER_KEY_ENV={master_b64}\n" + body
     env_path.write_text(body, encoding="utf-8")
 
 
@@ -121,6 +109,14 @@ def main() -> int:
         return 1
 
     try:
+        # Load .env values into process env so SecurityUtils can pick up master key.
+        from dotenv import dotenv_values
+
+        env_map = dotenv_values(env_path)
+        for kk, vv in env_map.items():
+            if vv is not None:
+                os.environ[str(kk)] = str(vv)
+
         plain = _load_plain_map(env_path)
     except ImportError as e:
         logger.error("%s", e)
@@ -130,23 +126,16 @@ def main() -> int:
         logger.error("未发现需要加密的非空敏感项，退出。")
         return 1
 
-    master = os.urandom(32)
-    master_b64 = base64.b64encode(master).decode("ascii")
-
     bak = _SERVICE_ROOT / ".env.bak.before_product_encrypt"
     shutil.copy2(env_path, bak)
     logger.info("已备份: %s", bak)
 
-    os.environ["SERVICE_MODE"] = "product"
-    os.environ["SERVER_AES_MASTER_KEY_ENV"] = master_b64
-    os.environ.pop("SERVER_AES_MASTER_KEY", None)
-
-    root = str(_SERVICE_ROOT)
-    if root not in sys.path:
-        sys.path.append(root)
     from openjiuwen_studio.core.manager.model_manager.utils.security_utils import SecurityUtils
 
     su = SecurityUtils()
+    if not su.get_initialized_master_key():
+        logger.error("未配置可用的 SERVER_AES_MASTER_KEY_ENV（或 KMS 根密钥），无法加密。")
+        return 1
     enc: dict[str, str] = {}
     for k, v in plain.items():
         c = su.encrypt_api_key(v)
@@ -154,18 +143,15 @@ def main() -> int:
             continue
         enc[k] = c
 
-    _rewrite_env_file(env_path, enc, master_b64)
+    _rewrite_env_file(env_path, enc)
 
     # 校验：用新文件再解密一轮（不依赖进程里旧环境）
     from dotenv import dotenv_values
 
     check = dotenv_values(env_path)
-    os.environ.clear()
     for kk, vv in check.items():
         if vv is not None:
             os.environ[kk] = str(vv)
-    os.environ["SERVICE_MODE"] = "product"
-    os.environ["SERVER_AES_MASTER_KEY_ENV"] = master_b64
     su2 = SecurityUtils()
     for k, v in enc.items():
         d = su2.decrypt_api_key(v)
@@ -174,8 +160,6 @@ def main() -> int:
             return 1
 
     logger.info("自检通过：密文可用当前根密钥解密。")
-    logger.info("请将下列根密钥 Base64 自行保存到安全处（本脚本只显示一次）：")
-    logger.info("%s", master_b64)
     return 0
 
 

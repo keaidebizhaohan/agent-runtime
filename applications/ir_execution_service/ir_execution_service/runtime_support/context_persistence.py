@@ -49,8 +49,10 @@ def _env_lock_ttl_seconds() -> int:
 
 
 def _redis_url() -> str:
-    # Reuse the same Redis connection settings used by memory/checkpointer:
-    # REDIS_HOST / REDIS_PORT / REDIS_USERNAME / REDIS_PASSWORD / REDIS_DB.
+    # 与 MemoryEngine 的 Redis KV 一致：显式 URL 优先，否则用 REDIS_HOST/... 组装
+    url = clean_env_value("REDIS_URL")
+    if url:
+        return url
     return MemoryEngineManager.build_redis_url()
 
 

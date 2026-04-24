@@ -20,7 +20,6 @@ from __future__ import annotations
 import asyncio
 import os
 import secrets
-import sys
 from pathlib import Path
 
 from openjiuwen_runtime.foundation.log import get_logger
@@ -110,13 +109,9 @@ async def _main() -> None:
         cached_expected.unlink()
     cached_expected.parent.mkdir(parents=True, exist_ok=True)
 
-    service_root = test_dir.parent
-    if str(service_root) not in sys.path:
-        sys.path.append(str(service_root))
-
     from fastapi import HTTPException
 
-    from runtime_support.ir_fetch import ensure_ir_local_path
+    from ..runtime_support.ir_fetch import ensure_ir_local_path
 
     try:
         local_path = await ensure_ir_local_path(object_key)

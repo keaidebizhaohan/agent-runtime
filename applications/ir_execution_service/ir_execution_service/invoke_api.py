@@ -18,17 +18,17 @@ from openjiuwen.core.context_engine.schema.config import ContextEngineConfig
 from openjiuwen_runtime.foundation.log import get_logger
 from openjiuwen_studio.schemas import ResponseModel
 
-from dsl_workflow_dependency_loader import WorkflowLlmApiKeyMissingError
-from react_agent_builder import build_react_agent_from_ir
-from runtime_support.context_persistence import RedisContextPersistence
-from runtime_support.http_response_contract import (
+from .dsl_workflow_dependency_loader import WorkflowLlmApiKeyMissingError
+from .react_agent_builder import build_react_agent_from_ir
+from .runtime_support.context_persistence import RedisContextPersistence
+from .runtime_support.http_response_contract import (
     LowcodeApiResponseCode,
     ResponseDataType,
     build_error_response_model,
     to_jsonable,
 )
-from runtime_support.execution_request import ExecutionPrepareError, prepare_execution_request
-from runtime_support.runtime_bootstrap import ensure_runtime_ready
+from .runtime_support.execution_request import ExecutionPrepareError, prepare_execution_request
+from .runtime_support.runtime_bootstrap import ensure_runtime_ready
 
 JSON_MEDIA_TYPE = "application/json; charset=utf-8"
 
@@ -233,7 +233,7 @@ async def handle_execute_invoke(body: Any) -> JSONResponse:
         return _json_response(build_error_response_model(exc.code, message=exc.message))
 
     if prepared.executable_kind == "workflow":
-        from workflow_ir_builder import build_core_workflow_from_ir_file
+        from .workflow_ir_builder import build_core_workflow_from_ir_file
         from openjiuwen.core.workflow import WorkflowExecutionState, WorkflowOutput
 
         try:
