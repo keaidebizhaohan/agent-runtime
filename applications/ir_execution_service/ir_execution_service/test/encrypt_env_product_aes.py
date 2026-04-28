@@ -1,5 +1,6 @@
-#!/usr/bin/env python3
 # coding: utf-8
+# Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
+
 """将 .env 中若干敏感项改为 SecurityUtils AES-GCM 密文，并切换为 SERVICE_MODE=product。
 
 用法（在 applications/ir_execution_service 目录）：

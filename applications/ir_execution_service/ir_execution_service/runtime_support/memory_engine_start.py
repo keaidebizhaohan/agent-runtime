@@ -66,7 +66,6 @@ def get_database_url() -> str:
         return f"gaussdb://{user}:{password}@{host}:{port}/{database}"
     if db_type == "sqlite":
         db_path = Path(get_env("SQLITE_DB_PATH", "data/databases"))
-        db_path.mkdir(parents=True, exist_ok=True)
         return f"sqlite:///{db_path / get_env('AGENT_SQLITE_DB', 'agent.db')}"
     raise ValueError(f"Unsupported database type: {db_type!r}")
 
@@ -100,6 +99,7 @@ class MemoryEngineManager:
         )
 
         data_dir = cls._resolve_memory_data_dir()
+        cls._ensure_local_dirs_if_needed(data_dir)
         vector_store = cls._create_vector_store(data_dir)
         embedding_model = cls._create_embedding_model()
 
@@ -197,27 +197,14 @@ class MemoryEngineManager:
         )
 
     @staticmethod
-    def build_redis_url() -> str:
-        host = clean_env_value("REDIS_HOST", "localhost")
-        port = get_int_env("REDIS_PORT", 6379)
-        password = resolve_secret_env("REDIS_PASSWORD", "")
-        username = clean_env_value("REDIS_USERNAME")
-        db = get_int_env("REDIS_DB", 0)
-        if password:
-            user_part = f"{quote(username, safe='')}:" if username else ""
-            auth = f"{user_part}{quote(password, safe='')}@"
-        else:
-            auth = ""
-        return f"redis://{auth}{host}:{port}/{db}"
-
-    @staticmethod
     def _create_redis_kv_store():
         from redis.asyncio import Redis
         from openjiuwen.extensions.store.kv.redis_store import RedisStore
 
-        url = clean_env_value("REDIS_URL")
+        # 每个业务场景只用自己的 Redis URL；记忆引擎只读 MEMORY_REDIS_URL，不允许回退/替补。
+        url = clean_env_value("MEMORY_REDIS_URL")
         if not url:
-            url = MemoryEngineManager.build_redis_url()
+            raise RuntimeError("KV_STORE_TYPE=redis 时必须设置 MEMORY_REDIS_URL（记忆引擎专用）。")
         _log.info(
             "Memory engine KV: RedisStore (%s)",
             url.split("@")[-1] if "@" in url else url,
@@ -238,11 +225,31 @@ class MemoryEngineManager:
 
     @staticmethod
     def _resolve_memory_data_dir() -> Path:
-        memory_data_path = Path(clean_env_value("MEMORY_DATA_PATH", "memory-data") or "memory-data")
+        memory_data_path = Path(
+            clean_env_value("MEMORY_DATA_PATH", "memory-data") or "memory-data"
+        )
         if not memory_data_path.is_absolute():
             memory_data_path = _APP_ROOT / memory_data_path
-        memory_data_path.mkdir(parents=True, exist_ok=True)
         return memory_data_path
+
+    @staticmethod
+    def _ensure_local_dirs_if_needed(memory_data_dir: Path) -> None:
+        """仅在确实需要本地落盘时创建目录，避免启动阶段无条件创建。
+
+        - DB_TYPE=sqlite：需要 SQLITE_DB_PATH
+        - INDEX_MANAGER_TYPE=chroma：需要 MEMORY_DATA_PATH（向量库持久化目录）
+        """
+        db_type = clean_env_value("DB_TYPE", "mysql").lower()
+        index_manager_type = clean_env_value("INDEX_MANAGER_TYPE", "milvus").lower()
+
+        if db_type == "sqlite":
+            db_path = Path(get_env("SQLITE_DB_PATH", "data/databases"))
+            if not db_path.is_absolute():
+                db_path = _APP_ROOT / db_path
+            db_path.mkdir(parents=True, exist_ok=True)
+
+        if index_manager_type == "chroma":
+            memory_data_dir.mkdir(parents=True, exist_ok=True)
 
     @staticmethod
     def _create_vector_store(data_dir: Path):

@@ -1,9 +1,5 @@
-#!/usr/bin/env python
 # coding: utf-8
 # Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
-
-# -*- coding: utf-8 -*-
-# Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved.
 
 """IR 执行服务 HTTP 入口。"""
 
@@ -60,7 +56,7 @@ class IrQueryBody(BaseModel):
     conversation_id: str
     ir_path: str = Field(
         ...,
-        description="OBS 桶内对象键（Object Key），对应文件会缓存到 LOWCODE_IR_DOWNLOAD_DIR。",
+        description="OBS 桶内对象键（Object Key）；正文经进程内缓存与可选 Redis 缓存，加速读取，不落盘。",
     )
     inputs: str
     timeout_ms: int = Field(120_000, ge=1)

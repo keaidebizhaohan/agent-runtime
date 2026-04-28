@@ -1,4 +1,6 @@
 # coding: utf-8
+# Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
+
 """对 openjiuwen_studio SecurityUtils 的薄封装，用于环境变量与 IR 中密文字段解密。"""
 
 from __future__ import annotations

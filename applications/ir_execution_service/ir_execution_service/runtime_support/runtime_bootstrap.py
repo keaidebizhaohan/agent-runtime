@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 
 from openjiuwen.core.session.checkpointer.checkpointer import CheckpointerConfig, CheckpointerFactory
 from openjiuwen_runtime.foundation.log import get_logger
@@ -34,10 +35,10 @@ async def init_redis_checkpointer() -> None:
 
     import openjiuwen.extensions.checkpointer.redis.checkpointer  # noqa: F401
 
-    # 与启动校验及 MemoryEngine KV 侧约定一致：显式 URL 优先，其次回退到 REDIS_* 拼装
-    url = clean_env_value("CHECKPOINTER_REDIS_URL") or clean_env_value("REDIS_URL")
+    # 每个业务场景只用自己的 Redis URL；检查点只读 CHECKPOINTER_REDIS_URL，不允许回退/替补。
+    url = clean_env_value("CHECKPOINTER_REDIS_URL")
     if not url:
-        url = MemoryEngineManager.build_redis_url()
+        raise RuntimeError("未设置 CHECKPOINTER_DISABLED 时必须设置 CHECKPOINTER_REDIS_URL（检查点专用）。")
     conf: dict = {"connection": {"url": url}}
 
     ttl_min = get_int_env("CHECKPOINTER_DEFAULT_TTL_MINUTES", 0)
@@ -63,6 +64,14 @@ async def ensure_runtime_ready() -> None:
         if _runtime_ready:
             return
         prepare_runtime_environment()
-        await MemoryEngineManager.init()
+        mem_raw = os.environ.get("IR_ENABLE_AGENT_MEMORY")
+        mem_enabled = get_bool_env("IR_ENABLE_AGENT_MEMORY", False)
+        if mem_enabled:
+            await MemoryEngineManager.init()
+        else:
+            if mem_raw is None:
+                _log.info("Memory engine disabled (IR_ENABLE_AGENT_MEMORY not set; default false); skip init.")
+            else:
+                _log.info("Memory engine disabled by IR_ENABLE_AGENT_MEMORY=%s; skip init.", mem_raw)
         await init_redis_checkpointer()
         _runtime_ready = True

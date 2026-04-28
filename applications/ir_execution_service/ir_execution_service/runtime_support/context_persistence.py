@@ -1,5 +1,5 @@
 # coding: utf-8
-# Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
+# Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved.
 
 """
 SessionModelContext persistence for ir_execution_service.
@@ -24,7 +24,6 @@ from typing import Any, AsyncIterator, Iterable, Optional
 
 from openjiuwen_runtime.foundation.log import get_logger
 
-from .memory_engine_start import MemoryEngineManager
 from .runtime_env import clean_env_value, get_int_env
 
 _log = get_logger(__name__)
@@ -49,11 +48,11 @@ def _env_lock_ttl_seconds() -> int:
 
 
 def _redis_url() -> str:
-    # 与 MemoryEngine 的 Redis KV 一致：显式 URL 优先，否则用 REDIS_HOST/... 组装
-    url = clean_env_value("REDIS_URL")
-    if url:
-        return url
-    return MemoryEngineManager.build_redis_url()
+    # 每个业务场景只用自己的 Redis URL；对话上下文使用默认/基础 Redis（可配前缀避免冲突）。
+    url = clean_env_value("LOWCODE_DEFAULT_REDIS_URL")
+    if not url:
+        raise RuntimeError("Context persistence requires LOWCODE_DEFAULT_REDIS_URL.")
+    return url
 
 
 def _context_state_key(conversation_id: str, context_id: str) -> str:

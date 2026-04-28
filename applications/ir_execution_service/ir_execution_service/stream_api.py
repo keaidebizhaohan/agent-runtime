@@ -1,7 +1,4 @@
 # coding: utf-8
-# Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
-
-# -*- coding: utf-8 -*-
 # Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved.
 
 """execute_stream 的 SSE 逻辑与 chunk 到 ResponseModel 的映射。"""
@@ -20,7 +17,7 @@ from openjiuwen_runtime.foundation.log import get_logger
 from openjiuwen_studio.schemas import ResponseModel
 
 from .dsl_workflow_dependency_loader import WorkflowLlmApiKeyMissingError
-from .react_agent_builder import build_react_agent_from_ir
+from .react_agent_builder import build_react_agent_from_ir_dict
 from .runtime_support.context_persistence import RedisContextPersistence
 from .runtime_support.execution_request import ExecutionPrepareError, prepare_execution_request
 from .runtime_support.http_response_contract import (
@@ -30,42 +27,10 @@ from .runtime_support.http_response_contract import (
     to_jsonable,
 )
 from .runtime_support.runtime_bootstrap import ensure_runtime_ready
+from .runtime_support.workflow_context_helpers import append_user_input_message_if_needed, stable_workflow_context_id
 
 _log = get_logger(__name__)
 _ctx_store = RedisContextPersistence()
-
-
-def _workflow_context_id(workflow: Any) -> str:
-    card = getattr(workflow, "card", None)
-    wf_id = getattr(card, "id", None) if card is not None else None
-    wf_ver = getattr(card, "version", None) if card is not None else None
-    if wf_id and wf_ver:
-        return f"{wf_id}_{wf_ver}"
-    if wf_id:
-        return str(wf_id)
-    return "workflow"
-
-
-async def _append_user_input_message_if_needed(context: Any, inputs_obj: Any) -> None:
-    from openjiuwen.core.foundation.llm import UserMessage
-    from openjiuwen.core.session import InteractiveInput
-
-    content: Any = None
-    if isinstance(inputs_obj, dict) and "query" in inputs_obj:
-        content = inputs_obj.get("query")
-    elif isinstance(inputs_obj, InteractiveInput) and inputs_obj.user_inputs:
-        content = list(inputs_obj.user_inputs.values())[-1]
-    if content is None:
-        return
-    try:
-        existing = context.get_messages() if hasattr(context, "get_messages") else []
-        if existing:
-            last = existing[-1]
-            if getattr(last, "role", None) == "user" and getattr(last, "content", None) == content:
-                return
-        await context.add_messages([UserMessage(role="user", content=content)])
-    except Exception:
-        _log.debug("append user input to context failed", exc_info=True)
 
 
 @asynccontextmanager
@@ -348,11 +313,17 @@ async def execute_stream_event_source(body: Any) -> AsyncIterator[str]:
         return
 
     if prepared.executable_kind == "workflow":
-        try:
-            from .workflow_ir_builder import build_core_workflow_from_ir_file
+        session_id = str(prepared.session_id or "").strip()
+        if not session_id:
+            c = LowcodeApiResponseCode.MISSING_PARAM
+            yield _stream_error_event(c, message=c.format_message(field="conversation_id"))
+            return
 
-            workflow = await build_core_workflow_from_ir_file(
-                prepared.ir_local_json_path,
+        try:
+            from .workflow_ir_builder import build_core_workflow_from_ir_dict
+
+            workflow = await build_core_workflow_from_ir_dict(
+                prepared.ir_root,
                 space_id=prepared.space_id,
                 current_user=prepared.current_user,
             )
@@ -363,8 +334,8 @@ async def execute_stream_event_source(body: Any) -> AsyncIterator[str]:
             yield _stream_error_event(LowcodeApiResponseCode.IR_LOAD_FAILED, message=str(e))
             return
 
-        conversation_id = str(prepared.session_id or "")
-        context_id = _workflow_context_id(workflow)
+        conversation_id = session_id
+        context_id = stable_workflow_context_id(workflow)
         had_interaction = False
 
         from openjiuwen.core.common.constants.constant import INTERACTION
@@ -377,7 +348,7 @@ async def execute_stream_event_source(body: Any) -> AsyncIterator[str]:
                     context_id=context_id,
                     config=ContextEngineConfig(),
                 )
-                await _append_user_input_message_if_needed(context, prepared.inputs_obj)
+                await append_user_input_message_if_needed(context, prepared.inputs_obj)
 
                 async def _wrapped_chunks() -> AsyncIterator[Any]:
                     nonlocal had_interaction
@@ -411,7 +382,7 @@ async def execute_stream_event_source(body: Any) -> AsyncIterator[str]:
         return
 
     try:
-        react_agent = await build_react_agent_from_ir(prepared.ir_local_json_path, prepared.current_user)
+        react_agent = await build_react_agent_from_ir_dict(prepared.ir_root, prepared.current_user)
     except Exception as e:
         yield _stream_error_event(LowcodeApiResponseCode.IR_LOAD_FAILED, message=str(e))
         return
