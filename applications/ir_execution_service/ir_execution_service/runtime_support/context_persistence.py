@@ -17,13 +17,17 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any, AsyncIterator, Iterable, Optional
+from urllib.parse import urlparse
 
 from openjiuwen_runtime.foundation.log import get_logger
 
+from .alarm_logger import AlarmServerName, AlarmSeverity, log_alarm
+from .interface_logger import log_client
 from .runtime_env import clean_env_value, get_int_env
 
 _log = get_logger(__name__)
@@ -53,6 +57,15 @@ def _redis_url() -> str:
     if not url:
         raise RuntimeError("Context persistence requires LOWCODE_DEFAULT_REDIS_URL.")
     return url
+
+
+def _redis_dest_ip() -> str:
+    url = _redis_url()
+    try:
+        host = urlparse(url).hostname or ""
+        return socket.gethostbyname(host) if host else ""
+    except Exception:
+        return ""
 
 
 def _context_state_key(conversation_id: str, context_id: str) -> str:
@@ -158,7 +171,17 @@ class RedisContextPersistence:
         )
 
         key = _context_state_key(conversation_id, context_id)
+        t0 = time.perf_counter()
         raw = await self._get_redis().get(key)
+        log_client(
+            interface_name="redis.get",
+            cost_ms=(time.perf_counter() - t0) * 1000.0,
+            ok=True,
+            return_code=0,
+            return_info="hit" if raw else "miss",
+            dest_ip=_redis_dest_ip(),
+            add_info={"key": key, "scene": "workflow_context"},
+        )
         if not raw:
             return ctx
 
@@ -166,6 +189,13 @@ class RedisContextPersistence:
             payload = json.loads(raw)
         except Exception:
             _log.warning("Context state JSON decode failed, key=%s", key, exc_info=True)
+            log_alarm(
+                server_name=AlarmServerName.REDIS,
+                level=AlarmSeverity.MINOR,
+                module="redis.get",
+                message=f"Context state JSON decode failed, key={key}",
+                ip=_redis_dest_ip(),
+            )
             return ctx
 
         # Expected format: {"context_id": {"messages":[...], "offload_messages":{...}}}
@@ -195,6 +225,13 @@ class RedisContextPersistence:
             saved = context.save_state()
         except Exception:
             _log.warning("Context save_state failed; skip persistence", exc_info=True)
+            log_alarm(
+                server_name=AlarmServerName.IR_EXECUTION_SERVICE,
+                level=AlarmSeverity.MINOR,
+                module="context.save_state",
+                message="Context save_state failed; skip persistence",
+                ip="",
+            )
             return
 
         # Keep ONLY user messages.
@@ -205,14 +242,41 @@ class RedisContextPersistence:
 
         payload = {context_id: {"messages": user_msgs, "offload_messages": {}}}
         key = _context_state_key(conversation_id, context_id)
+        t0 = time.perf_counter()
         await self._get_redis().set(key, json.dumps(payload, ensure_ascii=False), ex=_env_ttl_seconds())
+        log_client(
+            interface_name="redis.set",
+            cost_ms=(time.perf_counter() - t0) * 1000.0,
+            ok=True,
+            return_code=0,
+            return_info="saved",
+            dest_ip=_redis_dest_ip(),
+            add_info={"key": key, "ttl": _env_ttl_seconds(), "scene": "workflow_context"},
+        )
 
     async def delete(self, *, conversation_id: str, context_id: str) -> None:
         key = _context_state_key(conversation_id, context_id)
         try:
+            t0 = time.perf_counter()
             await self._get_redis().delete(key)
+            log_client(
+                interface_name="redis.delete",
+                cost_ms=(time.perf_counter() - t0) * 1000.0,
+                ok=True,
+                return_code=0,
+                return_info="deleted",
+                dest_ip=_redis_dest_ip(),
+                add_info={"key": key, "scene": "workflow_context"},
+            )
         except Exception:
             _log.warning("Context delete failed, key=%s", key, exc_info=True)
+            log_alarm(
+                server_name=AlarmServerName.REDIS,
+                level=AlarmSeverity.MAJOR,
+                module="redis.delete",
+                message=f"Context delete failed, key={key}",
+                ip=_redis_dest_ip(),
+            )
 
     @asynccontextmanager
     async def conversation_lock(self, *, conversation_id: str) -> AsyncIterator[None]:
@@ -229,14 +293,48 @@ class RedisContextPersistence:
         acquired = False
         try:
             # redis-py returns True/False for set(..., nx=True)
+            t0 = time.perf_counter()
             acquired = bool(await redis.set(key, token, ex=ttl, nx=True))
+            log_client(
+                interface_name="redis.setnx",
+                cost_ms=(time.perf_counter() - t0) * 1000.0,
+                ok=acquired,
+                return_code=0 if acquired else 1,
+                return_info="acquired" if acquired else "busy",
+                dest_ip=_redis_dest_ip(),
+                add_info={"key": key, "ttl": ttl, "scene": "workflow_context_lock"},
+            )
             if not acquired:
+                log_alarm(
+                    server_name=AlarmServerName.REDIS,
+                    level=AlarmSeverity.MINOR,
+                    module="redis.setnx",
+                    message=f"conversation lock busy: {conversation_id}",
+                    ip=_redis_dest_ip(),
+                )
                 raise RuntimeError(f"conversation lock busy: {conversation_id}")
             yield
         finally:
             if acquired:
                 try:
+                    t1 = time.perf_counter()
                     await redis.eval(_UNLOCK_IF_TOKEN_MATCHES_LUA, 1, key, token)
+                    log_client(
+                        interface_name="redis.eval_unlock",
+                        cost_ms=(time.perf_counter() - t1) * 1000.0,
+                        ok=True,
+                        return_code=0,
+                        return_info="released",
+                        dest_ip=_redis_dest_ip(),
+                        add_info={"key": key, "scene": "workflow_context_lock"},
+                    )
                 except Exception:
                     _log.warning("Lock release failed, key=%s", key, exc_info=True)
+                    log_alarm(
+                        server_name=AlarmServerName.REDIS,
+                        level=AlarmSeverity.MAJOR,
+                        module="redis.eval_unlock",
+                        message=f"Lock release failed, key={key}",
+                        ip=_redis_dest_ip(),
+                    )
 

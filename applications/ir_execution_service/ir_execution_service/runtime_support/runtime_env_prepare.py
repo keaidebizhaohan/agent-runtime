@@ -1,5 +1,5 @@
 # coding: utf-8
-# Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
+# Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved.
 
 """启动前环境准备：不为进程加载 .env 文件，仅校验必填项。
 
@@ -116,6 +116,8 @@ def _collect_obs_missing(missing: list[str]) -> None:
 def validate_runtime_environment() -> None:
     """根据当前进程环境变量校验；缺项收集后一次性抛出 RuntimeError。"""
     missing: list[str] = []
+    if _blank("LOWCODE_IR_EXECUTION_SERVICE_VERSION"):
+        missing.append("LOWCODE_IR_EXECUTION_SERVICE_VERSION（与 pyproject 发布版本对齐，由部署注入）")
     if _blank("CODE_SANDBOX_URL"):
         missing.append("CODE_SANDBOX_URL")
 

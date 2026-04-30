@@ -1,5 +1,5 @@
 # coding: utf-8
-# Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
+# Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved.
 
 from __future__ import annotations
 
@@ -18,15 +18,20 @@ import asyncio
 import hashlib
 import json
 import os
+import socket
+import time
 from collections import OrderedDict
 from typing import Any
+from urllib.parse import urlparse
 
 from fastapi import HTTPException
 
 from openjiuwen_runtime.foundation.log import get_logger
 
-from .studio_secrets import resolve_secret_env
+from .alarm_logger import AlarmServerName, AlarmSeverity, log_alarm
+from .interface_logger import log_client
 from .runtime_env import clean_env_value
+from .studio_secrets import resolve_secret_env
 
 
 _SECRET_HEADER_BOOL_TRUE = {"1", "true", "yes", "on"}
@@ -264,6 +269,7 @@ async def _read_obs_bytes(bucket: str, object_key: str) -> bytes:
         secret_access_key=resolve_secret_env("OBS_SECRET_ACCESS_KEY", ""),
         region_name=(os.environ.get("OBS_REGION") or "").strip() or None,
     )
+    t0 = time.perf_counter()
     try:
         # 直接走 S3 get_object 读取 bytes，避免任何临时文件落盘。
         async with storage.create_client() as s3:
@@ -271,8 +277,50 @@ async def _read_obs_bytes(bucket: str, object_key: str) -> bytes:
             body = resp.get("Body")
             if body is None:
                 raise HTTPException(status_code=502, detail=f"obs get_object missing Body: {object_key}")
-            return await body.read()
+            out = await body.read()
+            obs_dest = ""
+            raw_server = (os.environ.get("OBS_SERVER") or "").strip()
+            if raw_server:
+                try:
+                    host = urlparse(raw_server).hostname or raw_server
+                    obs_dest = socket.gethostbyname(host)
+                except Exception:
+                    obs_dest = ""
+            log_client(
+                interface_name="obs.get_object",
+                cost_ms=(time.perf_counter() - t0) * 1000.0,
+                ok=True,
+                return_code=0,
+                return_info="success",
+                dest_ip=obs_dest,
+                add_info={"bucket": bucket, "object_key": object_key, "size": len(out)},
+            )
+            return out
     except Exception as exc:
+        obs_dest = ""
+        raw_server = (os.environ.get("OBS_SERVER") or "").strip()
+        if raw_server:
+            try:
+                host = urlparse(raw_server).hostname or raw_server
+                obs_dest = socket.gethostbyname(host)
+            except Exception:
+                obs_dest = ""
+        log_client(
+            interface_name="obs.get_object",
+            cost_ms=(time.perf_counter() - t0) * 1000.0,
+            ok=False,
+            return_code=2002,
+            return_info=str(exc),
+            dest_ip=obs_dest,
+            add_info={"bucket": bucket, "object_key": object_key},
+        )
+        log_alarm(
+            server_name=AlarmServerName.OBS,
+            level=AlarmSeverity.MAJOR,
+            module="obs.get_object",
+            message=str(exc),
+            ip=obs_dest,
+        )
         # obs/s3 侧异常统一转为 502
         raise HTTPException(status_code=502, detail=f"failed to download ir from obs: {object_key}") from exc
 
@@ -294,21 +342,64 @@ async def _load_under_locks(bucket: str, object_key: str, dedup: str) -> dict[st
 
         # 2) redis (read)
         if r is not None and _redis_enabled():
+            redis_dest = ""
+            raw_url = (os.environ.get("LOWCODE_DEFAULT_REDIS_URL") or "").strip()
+            if raw_url:
+                try:
+                    host = urlparse(raw_url).hostname or ""
+                    redis_dest = socket.gethostbyname(host) if host else ""
+                except Exception:
+                    redis_dest = ""
             try:
+                t_redis = time.perf_counter()
                 cached = await r.get(_data_key(dedup))
             except _REDIS_OP_ERRORS as exc:
                 _LOG.warning("redis get failed for ir cache read (dedup=%s): %s", dedup, exc)
+                log_client(
+                    interface_name="redis.get",
+                    cost_ms=(time.perf_counter() - t_redis) * 1000.0,
+                    ok=False,
+                    return_code=1,
+                    return_info=str(exc),
+                    dest_ip=redis_dest,
+                    add_info={"key": _data_key(dedup)},
+                )
+                log_alarm(
+                    server_name=AlarmServerName.REDIS,
+                    level=AlarmSeverity.MAJOR,
+                    module="redis.get",
+                    message=str(exc),
+                    ip=redis_dest,
+                )
                 cached = None
             if cached:
                 if _memory_enabled():
                     await _ir_lru.put(dedup, cached)
+                log_client(
+                    interface_name="redis.get",
+                    cost_ms=(time.perf_counter() - t_redis) * 1000.0,
+                    ok=True,
+                    return_code=0,
+                    return_info="hit",
+                    dest_ip=redis_dest,
+                    add_info={"key": _data_key(dedup)},
+                )
                 return _parse_root(cached)
 
         # 3) redis lock to avoid thundering herd
         if r is not None and _redis_enabled():
+            redis_dest = ""
+            raw_url = (os.environ.get("LOWCODE_DEFAULT_REDIS_URL") or "").strip()
+            if raw_url:
+                try:
+                    host = urlparse(raw_url).hostname or ""
+                    redis_dest = socket.gethostbyname(host) if host else ""
+                except Exception:
+                    redis_dest = ""
             redis_lock_token = f"{os.getpid()}-{int(loop.time() * 1000)}-{dedup[:12]}"
             while loop.time() < deadline:
                 try:
+                    t_lock = time.perf_counter()
                     redis_lock_held = bool(await r.set(_lock_key(dedup), redis_lock_token, nx=True, ex=lock_ttl))
                 except _REDIS_OP_ERRORS as exc:
                     _LOG.warning(
@@ -316,19 +407,70 @@ async def _load_under_locks(bucket: str, object_key: str, dedup: str) -> dict[st
                         dedup,
                         exc,
                     )
+                    log_client(
+                        interface_name="redis.setnx",
+                        cost_ms=(time.perf_counter() - t_lock) * 1000.0,
+                        ok=False,
+                        return_code=1,
+                        return_info=str(exc),
+                        dest_ip=redis_dest,
+                        add_info={"key": _lock_key(dedup)},
+                    )
+                    log_alarm(
+                        server_name=AlarmServerName.REDIS,
+                        level=AlarmSeverity.MAJOR,
+                        module="redis.setnx",
+                        message=str(exc),
+                        ip=redis_dest,
+                    )
                     redis_lock_held = False
                     break
                 if redis_lock_held:
+                    log_client(
+                        interface_name="redis.setnx",
+                        cost_ms=(time.perf_counter() - t_lock) * 1000.0,
+                        ok=True,
+                        return_code=0,
+                        return_info="acquired",
+                        dest_ip=redis_dest,
+                        add_info={"key": _lock_key(dedup), "ttl": lock_ttl},
+                    )
                     break
                 await asyncio.sleep(0.05)
                 try:
+                    t_peer = time.perf_counter()
                     peer = await r.get(_data_key(dedup))
                 except _REDIS_OP_ERRORS as exc:
                     _LOG.warning("redis get failed while waiting for peer fill (dedup=%s): %s", dedup, exc)
+                    log_client(
+                        interface_name="redis.get",
+                        cost_ms=(time.perf_counter() - t_peer) * 1000.0,
+                        ok=False,
+                        return_code=1,
+                        return_info=str(exc),
+                        dest_ip=redis_dest,
+                        add_info={"key": _data_key(dedup)},
+                    )
+                    log_alarm(
+                        server_name=AlarmServerName.REDIS,
+                        level=AlarmSeverity.MAJOR,
+                        module="redis.get",
+                        message=str(exc),
+                        ip=redis_dest,
+                    )
                     peer = None
                 if peer:
                     if _memory_enabled():
                         await _ir_lru.put(dedup, peer)
+                    log_client(
+                        interface_name="redis.get",
+                        cost_ms=(time.perf_counter() - t_peer) * 1000.0,
+                        ok=True,
+                        return_code=0,
+                        return_info="peer_fill_hit",
+                        dest_ip=redis_dest,
+                        add_info={"key": _data_key(dedup)},
+                    )
                     return _parse_root(peer)
 
         # 4) obs fetch
@@ -342,19 +484,89 @@ async def _load_under_locks(bucket: str, object_key: str, dedup: str) -> dict[st
 
             # write back
             if r is not None and _redis_enabled():
+                redis_dest = ""
+                raw_url = (os.environ.get("LOWCODE_DEFAULT_REDIS_URL") or "").strip()
+                if raw_url:
+                    try:
+                        host = urlparse(raw_url).hostname or ""
+                        redis_dest = socket.gethostbyname(host) if host else ""
+                    except Exception:
+                        redis_dest = ""
                 try:
+                    t_set = time.perf_counter()
                     await r.set(_data_key(dedup), raw_json, ex=ttl)
                 except _REDIS_OP_ERRORS as exc:
                     _LOG.warning("redis set failed for ir cache write-back (dedup=%s): %s", dedup, exc)
+                    log_client(
+                        interface_name="redis.set",
+                        cost_ms=(time.perf_counter() - t_set) * 1000.0,
+                        ok=False,
+                        return_code=1,
+                        return_info=str(exc),
+                        dest_ip=redis_dest,
+                        add_info={"key": _data_key(dedup)},
+                    )
+                    log_alarm(
+                        server_name=AlarmServerName.REDIS,
+                        level=AlarmSeverity.MAJOR,
+                        module="redis.set",
+                        message=str(exc),
+                        ip=redis_dest,
+                    )
+                else:
+                    log_client(
+                        interface_name="redis.set",
+                        cost_ms=(time.perf_counter() - t_set) * 1000.0,
+                        ok=True,
+                        return_code=0,
+                        return_info="written",
+                        dest_ip=redis_dest,
+                        add_info={"key": _data_key(dedup), "ttl": ttl},
+                    )
             if _memory_enabled():
                 await _ir_lru.put(dedup, raw_json)
             return root
         finally:
             if r is not None and redis_lock_held and redis_lock_token is not None:
                 try:
+                    raw_url = (os.environ.get("LOWCODE_DEFAULT_REDIS_URL") or "").strip()
+                    redis_dest = ""
+                    if raw_url:
+                        try:
+                            host = urlparse(raw_url).hostname or ""
+                            redis_dest = socket.gethostbyname(host) if host else ""
+                        except Exception:
+                            redis_dest = ""
+                    t_unlock = time.perf_counter()
                     await r.eval(_UNLOCK_IF_TOKEN_MATCHES_LUA, 1, _lock_key(dedup), redis_lock_token)
                 except _REDIS_OP_ERRORS as exc:
                     _LOG.warning("redis unlock failed for ir fetch lock (dedup=%s): %s", dedup, exc)
+                    log_client(
+                        interface_name="redis.eval_unlock",
+                        cost_ms=(time.perf_counter() - t_unlock) * 1000.0,
+                        ok=False,
+                        return_code=1,
+                        return_info=str(exc),
+                        dest_ip=redis_dest,
+                        add_info={"key": _lock_key(dedup)},
+                    )
+                    log_alarm(
+                        server_name=AlarmServerName.REDIS,
+                        level=AlarmSeverity.MAJOR,
+                        module="redis.eval_unlock",
+                        message=str(exc),
+                        ip=redis_dest,
+                    )
+                else:
+                    log_client(
+                        interface_name="redis.eval_unlock",
+                        cost_ms=(time.perf_counter() - t_unlock) * 1000.0,
+                        ok=True,
+                        return_code=0,
+                        return_info="released",
+                        dest_ip=redis_dest,
+                        add_info={"key": _lock_key(dedup)},
+                    )
 
 
 async def ensure_ir_root(ir_path: str) -> dict[str, Any]:
