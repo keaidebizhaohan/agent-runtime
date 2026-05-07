@@ -4,7 +4,6 @@
 """OpenJiuwen Runtime Management SDK"""
 
 from openjiuwen_runtime.foundation.db.handler import DBHandler
-from openjiuwen_runtime.foundation.db.gaussdb_handler import GaussDBHandler
 from openjiuwen_runtime.foundation.db.mysql_handler import MySQLHandler
 from openjiuwen_runtime.foundation.db.sqlite_handler import SQLiteHandler
 
@@ -12,6 +11,7 @@ from .manager import DeploymentManager
 from .models.deployment_params import (
     DeployAgentParams,
     DeployPluginParams,
+    DeployImageParams,
     ListDeploymentsParams,
 )
 from .models.enums import DeployMode, DeploymentType, DeploymentStatus
@@ -49,6 +49,7 @@ __all__ = [
     # Deployment params
     "DeployAgentParams",
     "DeployPluginParams",
+    "DeployImageParams",
     "ListDeploymentsParams",
     # Enums
     "DeploymentType",
@@ -61,7 +62,6 @@ __all__ = [
     "DBHandler",
     "SQLiteHandler",
     "MySQLHandler",
-    "GaussDBHandler",
     # Base
     "CommonParams",
     "DeployContext",

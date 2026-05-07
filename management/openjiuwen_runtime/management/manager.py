@@ -1,5 +1,6 @@
 # coding: utf-8
 # Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
+from __future__ import annotations
 
 import asyncio
 import uuid
@@ -20,10 +21,12 @@ from .deployments import (
     SubprocessStrategy,
     DockerStrategy,
     K8sStrategy,
+    K8S_IMPORT_ERROR,
 )
 from .models.deployment_params import (
     DeployAgentParams,
     DeployPluginParams,
+    DeployImageParams,
     ListDeploymentsParams,
 )
 from .models.enums import DeployMode, DeploymentType, DeploymentStatus
@@ -89,11 +92,19 @@ class DeploymentManager:
     @staticmethod
     def _create_default_strategies() -> dict[DeployMode, BaseDeploymentStrategy]:
         """创建默认策略"""
-        return {
+        strategies = {
             DeployMode.SUBPROCESS: SubprocessStrategy(),
             DeployMode.DOCKER: DockerStrategy(),
-            DeployMode.K8S: K8sStrategy(),
+
         }
+        if K8sStrategy is not None:
+            strategies[DeployMode.K8S] = K8sStrategy()
+        else:
+            logger.warning(
+                "K8s strategy disabled because Kubernetes dependencies could not be imported: %s",
+                K8S_IMPORT_ERROR,
+            )
+        return strategies
 
     @staticmethod
     def _generate_deployment_id() -> str:
@@ -183,6 +194,32 @@ class DeploymentManager:
             )
         )
 
+    async def deploy_image(self, params: DeployImageParams) -> DeploymentInfo:
+        """部署镜像"""
+        if params.mode == DeployMode.SUBPROCESS:
+            raise NotImplementedError("deploy_image is not supported for SUBPROCESS mode")
+        logger.info(
+            "Deploying image: name=%s, version=%s, mode=%s, user_id=%s, space_id=%s",
+            params.name,
+            params.version,
+            params.mode,
+            params.user_id,
+            params.space_id,
+        )
+        extras = dict(params.extras)
+        extras["image"] = params.image
+        return await self._deploy(
+            _DeployExecutionParams(
+                deployment_type=DeploymentType.IMAGE,
+                name=params.name,
+                version=params.version,
+                mode=params.mode,
+                user_id=params.user_id,
+                space_id=params.space_id,
+                extras=extras,
+            )
+        )
+
     async def list_deployments(self, params: ListDeploymentsParams) -> list[DeploymentInfo]:
         """列出部署"""
         logger.debug(
@@ -252,7 +289,7 @@ class DeploymentManager:
                 logger.warning("Cannot stop deployment, mode not found: deployment_id=%s", deployment_id)
                 return False
 
-        strategy = self._get_strategy(mode)
+        strategy = self.get_strategy(mode)
         result = await strategy.stop(deployment_id, self.db_handler)
         if result.success:
             logger.info("Deployment stopped: deployment_id=%s", deployment_id)
@@ -275,7 +312,7 @@ class DeploymentManager:
         await self.stop_deployment(deployment_id, mode)
 
         if mode:
-            strategy = self._get_strategy(mode)
+            strategy = self.get_strategy(mode)
             await strategy.delete_record(self.db_handler, deployment_id)
 
         result = await self.db_handler.delete(
@@ -291,23 +328,27 @@ class DeploymentManager:
     async def get_process_info(self, deployment_id: str) -> Optional[ProcessInfo]:
         """获取进程部署详情"""
         logger.debug("Getting process info: deployment_id=%s", deployment_id)
-        strategy = self._get_strategy(DeployMode.SUBPROCESS)
+        strategy = self.get_strategy(DeployMode.SUBPROCESS)
         return await strategy.get_info(self.db_handler, deployment_id)
 
     async def get_docker_info(self, deployment_id: str) -> Optional[DockerInfo]:
         """获取Docker部署详情"""
         logger.debug("Getting docker info: deployment_id=%s", deployment_id)
-        strategy = self._get_strategy(DeployMode.DOCKER)
+        strategy = self.get_strategy(DeployMode.DOCKER)
         return await strategy.get_info(self.db_handler, deployment_id)
 
     async def get_k8s_info(self, deployment_id: str) -> Optional[K8sInfo]:
         """获取K8S部署详情"""
         logger.debug("Getting k8s info: deployment_id=%s", deployment_id)
-        strategy = self._get_strategy(DeployMode.K8S)
+        strategy = self.get_strategy(DeployMode.K8S)
         return await strategy.get_info(self.db_handler, deployment_id)
 
-    def _get_strategy(self, mode: DeployMode) -> BaseDeploymentStrategy:
+    def get_strategy(self, mode: DeployMode) -> BaseDeploymentStrategy:
         """获取部署策略"""
+        if mode == DeployMode.K8S and K8S_IMPORT_ERROR is not None:
+            raise RuntimeError(
+                f"K8s deployment is unavailable because Kubernetes dependencies failed to import: {K8S_IMPORT_ERROR}"
+            ) from K8S_IMPORT_ERROR
         return self._strategies[mode]
 
     async def _detect_deploy_mode(self, deployment_id: str) -> Optional[DeployMode]:
@@ -409,13 +450,15 @@ class DeploymentManager:
 
         await self.db_handler.create(DEPLOYMENT_TABLE_NAME, deployment_data)
 
-        strategy = self._get_strategy(params.mode)
+        strategy = self.get_strategy(params.mode)
 
         try:
             await strategy.create_record(
                 self.db_handler, deployment_id, params.version, **extras
             )
-            await strategy.deploy(deployment_id, self.db_handler)
+            deploy_result = await strategy.deploy(deployment_id, self.db_handler)
+            if not deploy_result.success:
+                raise RuntimeError(deploy_result.message or f"Deployment {deployment_id} failed")
 
             await self._wait_until_deployment_ready(deployment_id)
             logger.info(
@@ -430,6 +473,7 @@ class DeploymentManager:
                 {DeploymentFields.DEPLOYMENT_ID: deployment_id},
                 {DeploymentFields.DEPLOYMENT_STATUS: DeploymentStatus.FAILED.value},
             )
+            raise
 
         deployment_record = await self.db_handler.get(
             DEPLOYMENT_TABLE_NAME,
