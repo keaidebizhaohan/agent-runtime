@@ -9,7 +9,7 @@ from sqlalchemy.util import memoized_property
 
 _MODULE_PATH = "openjiuwen_runtime.foundation.db.dialects.gaussdb_asyncgaussdb"
 _DRIVER_INSTALL_HINT = (
-    "DB_TYPE is set to gaussdb/opengauss, but optional dependency async-gaussdb is not installed. "
+    "RUNTIME_DB_TYPE is set to gaussdb/opengauss, but optional dependency async-gaussdb is not installed. "
     "Install openjiuwen-runtime-foundation[gaussdb] or async-gaussdb>=0.30.4."
 )
 

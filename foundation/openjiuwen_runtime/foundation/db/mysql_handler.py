@@ -12,11 +12,11 @@ class MySQLHandler(SQLAlchemyHandler):
     def __init__(
         self
     ):
-        self.host = settings.DB_HOST
-        self.port = settings.DB_PORT
-        self.database = settings.DB_NAME
-        self.user = settings.DB_USER
-        self.password = settings.DB_PASSWORD
+        self.host = settings.RUNTIME_DB_HOST
+        self.port = settings.RUNTIME_DB_PORT
+        self.database = settings.RUNTIME_DB_NAME
+        self.user = settings.RUNTIME_DB_USER
+        self.password = settings.RUNTIME_DB_PASSWORD
 
         database_url = f"mysql+aiomysql://{self.user}:{self.password}@{self.host}:{self.port}/{self.database}"
         super().__init__(database_url)

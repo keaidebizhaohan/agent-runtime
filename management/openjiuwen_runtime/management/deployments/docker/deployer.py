@@ -187,7 +187,18 @@ class DockerDeployer(Deployer[DockerParams]):
             self._containers[deployment_id] = container_id
 
             # 获取该容器在宿主机上的port
-            success, port_output = await self._run_docker_command("port", container_id, iport)
+            port_output = None
+            max_retry = 6  # 最多重试6次
+            retry_interval = 1  # 每次间隔1秒
+
+            for i in range(max_retry):
+                success, port_output = await self._run_docker_command("port", container_id, iport)
+                if success and port_output:
+                    break
+                logger.warning(f"第{i+1}次获取端口失败，等待{retry_interval}秒后重试... container_id={container_id}")
+                await asyncio.sleep(retry_interval)
+
+            # 最终判断
             if not success or not port_output:
                 raise RuntimeError(f"无法获取容器映射的端口: {container_id}")
 

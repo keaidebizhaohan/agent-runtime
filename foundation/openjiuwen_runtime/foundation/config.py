@@ -16,16 +16,16 @@ class Settings(BaseSettings):
     # --------------------------
     # 【基础配置】
     # --------------------------
-    DB_TYPE: Literal["mysql", "sqlite", "gaussdb", "opengauss"] = Field(default="sqlite", env="DB_TYPE")
+    RUNTIME_DB_TYPE: Literal["mysql", "sqlite", "gaussdb", "opengauss"] = Field(default="sqlite", env="RUNTIME_DB_TYPE")
 
     # --------------------------
-    # 【MySQL 配置】（静态可选，DB_TYPE=mysql 时必选）
+    # 【MySQL RUNTIME_DB_TYPE=mysql 时必选）
     # --------------------------
-    DB_HOST: Optional[str] = Field(default=None, env="DB_HOST")
-    DB_PORT: Optional[int] = Field(default=None, env="DB_PORT")
-    DB_USER: Optional[str] = Field(default=None, env="DB_USER")
-    DB_PASSWORD: Optional[str] = Field(default=None, env="DB_PASSWORD")
-    DB_NAME: Optional[str] = Field(default=None, env="DB_NAME")
+    RUNTIME_DB_HOST: Optional[str] = Field(default=None, env="RUNTIME_DB_HOST")
+    RUNTIME_DB_PORT: Optional[int] = Field(default=None, env="RUNTIME_DB_PORT")
+    RUNTIME_DB_USER: Optional[str] = Field(default=None, env="RUNTIME_DB_USER")
+    RUNTIME_DB_PASSWORD: Optional[str] = Field(default=None, env="RUNTIME_DB_PASSWORD")
+    RUNTIME_DB_NAME: Optional[str] = Field(default=None, env="RUNTIME_DB_NAME")
 
     # --------------------------
     # 【服务配置】
@@ -53,23 +53,26 @@ class Settings(BaseSettings):
     # ========================
     @model_validator(mode="after")
     def check_mysql_required(self) -> "Settings":
-        if self.DB_TYPE in {"mysql", "gaussdb", "opengauss"}:
+        if self.RUNTIME_DB_TYPE in {"mysql", "gaussdb", "opengauss"}:
             missing = []
-            if not self.DB_HOST:
-                missing.append("DB_HOST")
-            if not self.DB_PORT:
-                missing.append("DB_PORT")
-            if not self.DB_USER:
-                missing.append("DB_USER")
-            if not self.DB_PASSWORD:
-                missing.append("DB_PASSWORD")
-            if not self.DB_NAME:
-                missing.append("DB_NAME")
+            if not self.RUNTIME_DB_HOST:
+                missing.append("RUNTIME_DB_HOST")
+            if not self.RUNTIME_DB_PORT:
+                missing.append("RUNTIME_DB_PORT")
+            if not self.RUNTIME_DB_USER:
+                missing.append("RUNTIME_DB_USER")
+            if not self.RUNTIME_DB_PASSWORD:
+                missing.append("RUNTIME_DB_PASSWORD")
+            if not self.RUNTIME_DB_NAME:
+                missing.append("RUNTIME_DB_NAME")
 
             if missing:
-                raise ValueError(
-                    f"When DB_TYPE is mysql/gaussdb/opengauss, the following fields are required: {', '.join(missing)}"
+                msg = (
+                    "When RUNTIME_DB_TYPE is mysql/gaussdb/opengauss, "
+                    "the following fields are required: "
+                    f"{', '.join(missing)}"
                 )
+                raise ValueError(msg)
         return self
 
     @model_validator(mode="after")
@@ -130,7 +133,8 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=os.path.join(PROJECT_ROOT, "server/.env"),
         env_file_encoding="utf-8",
-        case_sensitive=True
+        case_sensitive=True,
+        extra="ignore"
     )
 
 # 初始化配置

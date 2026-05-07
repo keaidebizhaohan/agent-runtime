@@ -142,8 +142,8 @@ class LocalSubprocessDeployer(Deployer[SubprocessParams]):
             logger.info("Virtual environment created: %s", venv_path)
 
             if settings.MODE == "dev":
-                # 安装基础运行时 WHL（foundation/management/service）
-                base_whl_files = sorted(settings.dist_path.glob("openjiuwen_runtime_*.whl"))
+                # 安装基础运行时 WHL（studio/foundation/management/service）
+                base_whl_files = sorted(settings.dist_path.glob("openjiuwen_*.whl"))
                 for whl_file in base_whl_files:
                     self.venv_manager.pip_install(deployment_id, str(whl_file))
                     logger.info("Installed base WHL: %s", whl_file.name)

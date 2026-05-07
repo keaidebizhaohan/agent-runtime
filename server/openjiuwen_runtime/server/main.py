@@ -40,18 +40,18 @@ logger = get_logger(__name__)
 _allocated_ports: set[int] = set()
 
 # 初始化数据库组件
-logger.info(f"Using database: {settings.DB_TYPE}")
-if settings.DB_TYPE == "sqlite":
+logger.info(f"Using database: {settings.RUNTIME_DB_TYPE}")
+if settings.RUNTIME_DB_TYPE == "sqlite":
     db_handler = SQLiteHandler("deployments.db")
-elif settings.DB_TYPE == "mysql":
+elif settings.RUNTIME_DB_TYPE == "mysql":
     db_handler = MySQLHandler()
-elif settings.DB_TYPE in {"gaussdb", "opengauss"}:
+elif settings.RUNTIME_DB_TYPE in {"gaussdb", "opengauss"}:
     from openjiuwen_runtime.foundation.db.gaussdb_handler import GaussDBHandler
 
     db_handler = GaussDBHandler()
 else:
     raise ValueError(
-        f"Unsupported DB_TYPE: {settings.DB_TYPE}. Use 'sqlite', 'mysql', 'gaussdb', or 'opengauss'."
+        f"Unsupported RUNTIME_DB_TYPE: {settings.RUNTIME_DB_TYPE}. Use 'sqlite', 'mysql', 'gaussdb', or 'opengauss'."
     )
 
 manager = DeploymentManager(db_handler)

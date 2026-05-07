@@ -42,10 +42,10 @@ from typing import AsyncIterator, Tuple
 
 # 运行时数据库类型：优先保留外部注入（例如 gaussdb），缺失/非法值回退 sqlite。
 _VALID_DB_TYPES = {"mysql", "sqlite", "gaussdb", "opengauss"}
-_runtime_db_type = (os.getenv("DB_TYPE") or "").strip().lower()
+_runtime_db_type = (os.getenv("RUNTIME_DB_TYPE") or "").strip().lower()
 if _runtime_db_type not in _VALID_DB_TYPES:
     _runtime_db_type = "sqlite"
-os.environ["DB_TYPE"] = _runtime_db_type
+os.environ["RUNTIME_DB_TYPE"] = _runtime_db_type
 
 # lowcode 运行链路会间接导入 openjiuwen_studio，当前其数据库层仅支持 mysql/sqlite/none。
 # 当 runtime 以 gaussdb/opengauss 启动时，这里切换 studio 侧 DB_TYPE，避免因不支持而阻塞低码启动。
@@ -77,7 +77,7 @@ def _parse_userdata_env_vars():
             pass
 
     for key, value in env_vars.items():
-        if key not in os.environ and key != "DB_TYPE":
+        if key not in os.environ and key != "RUNTIME_DB_TYPE":
             os.environ[key] = str(value)
 
     return env_vars
@@ -116,7 +116,7 @@ from openjiuwen_runtime.examples.lowcode_agent.workflow_registration import (
 from openjiuwen_runtime.service.app.agent_app import AgentApp
 
 if _runtime_db_type in {"gaussdb", "opengauss"}:
-    os.environ["DB_TYPE"] = _studio_db_type
+    os.environ["RUNTIME_DB_TYPE"] = _studio_db_type
 
 from openjiuwen_studio.core.executor.component.code_runner.remote import remote_code_runner
 

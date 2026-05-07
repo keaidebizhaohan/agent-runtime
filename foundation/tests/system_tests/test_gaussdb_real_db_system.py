@@ -52,7 +52,7 @@ class TestGaussDBRealDatabaseSystem(unittest.IsolatedAsyncioTestCase):
         if not _is_enabled(enabled):
             raise unittest.SkipTest("real-db ST is disabled; set GAUSSDB_REAL_ST_ENABLED=1 to enable")
 
-        db_type = _pick_env("GAUSSDB_REAL_DB_TYPE", "DB_TYPE", default="gaussdb").lower()
+        db_type = _pick_env("GAUSSDB_REAL_DB_TYPE", "RUNTIME_DB_TYPE", default="gaussdb").lower()
         if db_type not in {"gaussdb", "opengauss"}:
             raise unittest.SkipTest(f"unsupported db type for this ST: {db_type!r}")
 

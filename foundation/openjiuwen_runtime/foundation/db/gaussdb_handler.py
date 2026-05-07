@@ -15,10 +15,10 @@ class GaussDBHandler(SQLAlchemyHandler):
     def __init__(self):
         ensure_async_gaussdb_installed()
         ensure_gaussdb_dialect_registered()
-        user = quote(settings.DB_USER or "", safe="")
-        password = quote(settings.DB_PASSWORD or "", safe="")
+        user = quote(settings.RUNTIME_DB_USER or "", safe="")
+        password = quote(settings.RUNTIME_DB_PASSWORD or "", safe="")
         database_url = (
             f"gaussdb+async_gaussdb://{user}:{password}@"
-            f"{settings.DB_HOST}:{settings.DB_PORT}/{settings.DB_NAME}"
+            f"{settings.RUNTIME_DB_HOST}:{settings.RUNTIME_DB_PORT}/{settings.RUNTIME_DB_NAME}"
         )
         super().__init__(database_url)

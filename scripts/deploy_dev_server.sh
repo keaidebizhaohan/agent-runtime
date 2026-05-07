@@ -38,10 +38,10 @@ source ${ENV_FILE}      # Load environment variables from file
 set +a                  # Disable automatic export
 
 FOUNDATION_INSTALL_TARGET="../foundation"
-DB_TYPE_NORMALIZED="$(echo "${DB_TYPE:-}" | tr '[:upper:]' '[:lower:]')"
+DB_TYPE_NORMALIZED="$(echo "${RUNTIME_DB_TYPE:-}" | tr '[:upper:]' '[:lower:]')"
 if [[ "${DB_TYPE_NORMALIZED}" == "gaussdb" || "${DB_TYPE_NORMALIZED}" == "opengauss" ]]; then
     FOUNDATION_INSTALL_TARGET="../foundation[gaussdb]"
-    echo "Detected DB_TYPE=${DB_TYPE}; install foundation with [gaussdb] optional dependency."
+    echo "Detected RUNTIME_DB_TYPE=${RUNTIME_DB_TYPE}; install foundation with [gaussdb] optional dependency."
 fi
 
 if [[ "$OSTYPE" == "darwin"* ]]; then

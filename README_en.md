@@ -92,15 +92,15 @@ cp .env.example .env
 
 Edit `server/.env` as needed. Important fields include:
 
-- **`DB_TYPE`**: `sqlite`, `mysql`, `gaussdb`, or `opengauss`
+- **`RUNTIME_DB_TYPE`**: `sqlite`, `mysql`, `gaussdb`, or `opengauss`
 - **`IP`**: reachable address for Runtime / agents
 - **`LOWCODE_IMAGE`**: low-code agent container image (required when using Docker/K8s-style flows)
 
 Notes:
 
 - The default install only includes dependencies for `sqlite` and `mysql`.
-- When `DB_TYPE=gaussdb` or `DB_TYPE=opengauss`, Runtime additionally needs `async-gaussdb`.
-- If you use the repository startup scripts, they detect `DB_TYPE` from `server/.env` and install `foundation[gaussdb]` automatically. For a manual setup, run `uv pip install -e "./foundation[gaussdb]"`.
+- When `RUNTIME_DB_TYPE=gaussdb` or `RUNTIME_DB_TYPE=opengauss`, Runtime additionally needs `async-gaussdb`.
+- If you use the repository startup scripts, they detect `RUNTIME_DB_TYPE` from `server/.env` and install `foundation[gaussdb]` automatically. For a manual setup, run `uv pip install -e "./foundation[gaussdb]"`.
 
 For a full reference, see **`docs/en/2. Configuration.md`** (Chinese: `docs/zh/2. 配置说明.md`).
 
