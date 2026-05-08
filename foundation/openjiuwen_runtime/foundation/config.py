@@ -3,6 +3,7 @@
 
 """Server Configuration"""
 import os
+import json
 from typing import Optional, Literal
 from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -41,6 +42,8 @@ class Settings(BaseSettings):
     UV_EXTRA_ARGS: str = Field(default="", env="UV_EXTRA_ARGS")
     DEPLOY_TYPE: Literal["subprocess", "docker", "k8s"] = Field(default="subprocess", env="DEPLOY_TYPE")
     MODE: Literal["dev", "product"] = Field(default="product", env="MODE")
+    KUBECONFIG: str = Field(default="", env="KUBECONFIG")
+    K8S_DEFAULT_CONFIG_PATH: str = Field(default="", env="K8S_DEFAULT_CONFIG_PATH")
 
     # ========================
     # 内置 对象
@@ -127,6 +130,21 @@ class Settings(BaseSettings):
         self.dist_path.mkdir(parents=True, exist_ok=True)
 
         return self
+
+    def get_k8s_defaults(self) -> dict:
+        """读取 K8s 默认配置 JSON 文件，返回参数字典。"""
+        if not self.K8S_DEFAULT_CONFIG_PATH:
+            return {}
+        config_path = Path(self.K8S_DEFAULT_CONFIG_PATH)
+        if not config_path.is_absolute():
+            config_path = PROJECT_ROOT / config_path
+        if not config_path.exists():
+            return {}
+        try:
+            defaults = json.loads(config_path.read_text(encoding="utf-8"))
+            return defaults
+        except (json.JSONDecodeError, TypeError) as e:
+            return {}
 
 
     # 自动从 .env 读取
