@@ -18,6 +18,7 @@ DEFAULT_PKG_DIRS=(
     service
     server
     applications/lowcode_agent
+    applications/ir_execution_service
 )
 
 # 如果传入参数，则使用传入的目录
@@ -37,18 +38,18 @@ do
     # 修改内部依赖版本号
     case "${pkg_dir}" in
         management|service)
-            sed -i 's/"openjiuwen-runtime-foundation==.*"/"openjiuwen-runtime-foundation=='"${VERSION}"'"/' pyproject.toml
+            sed -i 's/"openjiuwen-runtime-foundation.*"/"openjiuwen-runtime-foundation=='"${VERSION}"'"/' pyproject.toml
             ;;
         cli|server)
-            sed -i 's/"openjiuwen-runtime-foundation==.*"/"openjiuwen-runtime-foundation=='"${VERSION}"'"/' pyproject.toml
-            sed -i 's/"openjiuwen-runtime-management==.*"/"openjiuwen-runtime-management=='"${VERSION}"'"/' pyproject.toml
+            sed -i 's/"openjiuwen-runtime-foundation.*"/"openjiuwen-runtime-foundation=='"${VERSION}"'"/' pyproject.toml
+            sed -i 's/"openjiuwen-runtime-management.*"/"openjiuwen-runtime-management=='"${VERSION}"'"/' pyproject.toml
             ;;
         applications/lowcode_agent)
-            sed -i 's/"openjiuwen-runtime-service==.*"/"openjiuwen-runtime-service=='"${VERSION}"'"/' pyproject.toml
+            sed -i 's/"openjiuwen-runtime-service.*"/"openjiuwen-runtime-service=='"${VERSION}"'"/' pyproject.toml
             ;;
         applications/ir_execution_service)
-            sed -i 's/"openjiuwen-runtime-foundation==.*"/"openjiuwen-runtime-foundation=='"${VERSION}"'"/' pyproject.toml
-            sed -i 's/"openjiuwen-runtime-service==.*"/"openjiuwen-runtime-service=='"${VERSION}"'"/' pyproject.toml
+            sed -i 's/"openjiuwen-runtime-foundation.*"/"openjiuwen-runtime-foundation=='"${VERSION}"'"/' pyproject.toml
+            sed -i 's/"openjiuwen-runtime-service.*"/"openjiuwen-runtime-service=='"${VERSION}"'"/' pyproject.toml
             ;;
         *)
             ;;
