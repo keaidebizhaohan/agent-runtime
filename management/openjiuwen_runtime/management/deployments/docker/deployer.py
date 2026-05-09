@@ -24,6 +24,7 @@ from ..base.deployer import Deployer
 from ..base.models import DeployContext, DeployResult
 from .models import DockerParams
 from ...models.enums import DeploymentStatus
+from .utils import find_available_port
 
 logger = get_logger(__name__)
 
@@ -71,7 +72,8 @@ class DockerDeployer(Deployer[DockerParams]):
         container_name: str,
         env_vars: dict,
         volumes: list,
-        port: str,
+        container_port: str,
+        host_port: int,
         ir_source_path: str
     ) -> str:
         """
@@ -96,7 +98,8 @@ class DockerDeployer(Deployer[DockerParams]):
                 if "source" in vol and "target" in vol:
                     create_args.extend(["-v", f"{vol['source']}:{vol['target']}"])
 
-        create_args.extend(["-p", port])
+        port_mapping = f"{host_port}:{container_port}"
+        create_args.extend(["-p", port_mapping])
 
         # 镜像
         image_name = settings.LOWCODE_IMAGE
@@ -176,35 +179,29 @@ class DockerDeployer(Deployer[DockerParams]):
                 if not package_name:
                     raise RuntimeError("package_name is required for docker deployment")
 
+            logger.debug("Start scanning host port range...")
+            available_port = find_available_port(
+                host=settings.IP
+            )
+
+            if available_port:
+                logger.info("Found available port: %d", available_port)
+            else:
+                raise RuntimeError("No available port found")
+
             # 创建并启动低代码Agent容器
             container_id = await self.deploy_lowcode_container(
                 container_name=container_name,
                 env_vars=env_vars,
                 volumes=volumes,
-                port=iport,
+                container_port=iport,
+                host_port=available_port,
                 ir_source_path=ir_path
             )
             self._containers[deployment_id] = container_id
 
-            # 获取该容器在宿主机上的port
-            port_output = None
-            max_retry = 6  # 最多重试6次
-            retry_interval = 1  # 每次间隔1秒
-
-            for i in range(max_retry):
-                success, port_output = await self._run_docker_command("port", container_id, iport)
-                if success and port_output:
-                    break
-                logger.warning(f"第{i+1}次获取端口失败，等待{retry_interval}秒后重试... container_id={container_id}")
-                await asyncio.sleep(retry_interval)
-
-            # 最终判断
-            if not success or not port_output:
-                raise RuntimeError(f"无法获取容器映射的端口: {container_id}")
-
-            # 解析输出 0.0.0.0:12345 → 拿到 12345
-            port = port_output.strip().split(":")[-1]
-            url = f"http://{settings.IP}:{port}"
+            url = f"http://{settings.IP}:{available_port}"
+            logger.debug("url: %s", url)
 
             logger.info(
                 "Docker deployed: deployment_id=%s, container=%s, url=%s",
