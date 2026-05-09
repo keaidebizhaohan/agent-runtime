@@ -9,7 +9,7 @@ pip uninstall -y setuptools twine -y
 pip install setuptools==82.0.1 wheel==0.46.3
 pip install twine==6.2.0
 
-PROJECT_DIR=${PWD}
+PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # 默认全部构建目录
 DEFAULT_PKG_DIRS=(
