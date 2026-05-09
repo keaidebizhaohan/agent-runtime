@@ -332,8 +332,7 @@ async def _amain() -> int:
     if target_port != args.container_port:
         logger.info(
             "注意: --target-port 与 --container-port 不一致时，"
-            "请确保 Pod 内进程实际监听的地址与 WSS 连接一致。",
-            file=sys.stderr,
+            "请确保 Pod 内进程实际监听的地址与 WSS 连接一致。"
         )
 
     env = _parse_env(args.env)
@@ -413,14 +412,10 @@ async def _amain() -> int:
         wire = WireIRequest(msg)
         if not wire.request_id:
             logger.info(
-                "提示: 消息未提供 request_id，Access 会自动生成 UUID 用于多路复用",
-                file=sys.stderr,
-            )
+                "提示: 消息未提供 request_id，Access 会自动生成 UUID 用于多路复用")
         logger.info(
             f"已发送 → request_id={wire.request_id} chat_id={wire.chat_id} "
-            f"bot_id={wire.bot_id}，等待流式响应…",
-            file=sys.stderr,
-        )
+            f"bot_id={wire.bot_id}，等待流式响应…")
         async for chunk in access.send_message(wire):
             logger.info("receive chunk:")
             logger.info(json.dumps(chunk, ensure_ascii=False, default=str))

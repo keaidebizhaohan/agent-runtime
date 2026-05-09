@@ -335,11 +335,7 @@ async def _run_one(
         raw=json.dumps(msg, ensure_ascii=False),
     )
     ts0 = time.monotonic() - t0
-    logger.info(
-        f"[{_ts_now()} +{ts0:6.2f}s] >>> SEND  sid={spec.sid} req#{seq} rid={rid}",
-        file=sys.stderr,
-        flush=True,
-    )
+    logger.info(f"[{_ts_now()} +{ts0:6.2f}s] >>> SEND  sid={spec.sid} req#{seq} rid={rid}")
     chunks = 0
     async for chunk in access.send_message(sreq):
         chunks += 1
@@ -348,16 +344,10 @@ async def _run_one(
         if len(snippet) > 200:
             snippet = snippet[:200] + "...<truncated>"
         logger.info(
-            f"[{_ts_now()}] chunk sid={spec.sid} req#{seq} #{chunks} {snippet}",
-            file=sys.stderr,
-            flush=True,
-        )
+            f"[{_ts_now()}] chunk sid={spec.sid} req#{seq} #{chunks} {snippet}")
     ts1 = time.monotonic() - t0
     logger.info(
-        f"[{_ts_now()} +{ts1:6.2f}s] <<< DONE  sid={spec.sid} req#{seq} chunks={chunks}",
-        file=sys.stderr,
-        flush=True,
-    )
+        f"[{_ts_now()} +{ts1:6.2f}s] <<< DONE  sid={spec.sid} req#{seq} chunks={chunks}")
 
 
 async def _run_session(
@@ -365,18 +355,12 @@ async def _run_session(
 ) -> None:
     logger.info(
         f"[{_ts_now()}] === START session sid={spec.sid} ttl={spec.ttl}s "
-        f"msgs={spec.msgs} conc={spec.conc} ===",
-        file=sys.stderr,
-        flush=True,
-    )
+        f"msgs={spec.msgs} conc={spec.conc} ===")
     await asyncio.gather(
         *(_run_one(access, spec, i, template, t0=t0) for i in range(spec.msgs))
     )
     logger.info(
-        f"[{_ts_now()}] === END   session sid={spec.sid} (全部 {spec.msgs} 条已完成) ===",
-        file=sys.stderr,
-        flush=True,
-    )
+        f"[{_ts_now()}] === END   session sid={spec.sid} (全部 {spec.msgs} 条已完成) ===")
 
 
 async def _amain() -> int:
@@ -395,15 +379,11 @@ async def _amain() -> int:
     if args.min_idle > 0:
         logger.info(
             f"提示: --min-idle={args.min_idle} > 0，意味着即使最后一个 session 到期，"
-            "维持热备的 pod 仍不会被回收（不会观测到“全部 pod 被删除”）。",
-            file=sys.stderr,
-        )
+            "维持热备的 pod 仍不会被回收（不会观测到“全部 pod 被删除”）。")
     if args.max_services > 1:
         logger.info(
             f"提示: --max-services={args.max_services} > 1，理论上仍会落同 pod（亲和+容量优先），"
-            "但若 autoscale 多拉了备 pod，需自行 kubectl 区分。",
-            file=sys.stderr,
-        )
+            "但若 autoscale 多拉了备 pod，需自行 kubectl 区分。")
 
     target_port = (
         args.target_port if args.target_port is not None else args.container_port
@@ -411,9 +391,7 @@ async def _amain() -> int:
     if target_port != args.container_port:
         logger.info(
             "注意: --target-port 与 --container-port 不一致时，"
-            "请确保 Pod 内进程实际监听的地址与 WSS 连接一致。",
-            file=sys.stderr,
-        )
+            "请确保 Pod 内进程实际监听的地址与 WSS 连接一致。")
 
     env = _parse_env(args.env)
     acc_cfg = AccessConfig(
@@ -508,18 +486,14 @@ async def _amain() -> int:
             f"buffer={args.observe_buffer}s → 全部完成后等待 {wait_after}s\n"
             f"建议另开终端: kubectl get pods -n {args.namespace} -w | "
             f"findstr {args.name_prefix}\n"
-            "============================================================",
-            file=sys.stderr,
-            flush=True,
-        )
+            "============================================================")
 
         t0 = time.monotonic()
         total_msgs = sum(s.msgs for s in specs)
 
         logger.info(
-            f"[{_ts_now()}] >>> 开始执行模式：{args.session_run_mode.upper()}，共 {len(specs)} 个 Session，{total_msgs} 条消息",
-            file=sys.stderr, flush=True
-        )
+            f"[{_ts_now()}] >>> 开始执行模式：{args.session_run_mode.upper()}，共 {len(specs)} 个 Session，"
+            f"{total_msgs} 条消息")
 
         if args.session_run_mode == "parallel":
             # 并发执行
@@ -531,35 +505,24 @@ async def _amain() -> int:
             for s in specs:
                 await _run_session(access, s, args.message_template_json, t0=t0)
                 ts_end_session = time.monotonic() - t0
-                logger.info(f"[{_ts_now()}] >>> Session {s.sid} 串行环节结束 (elapsed={ts_end_session:.2f}s)",
-                      file=sys.stderr, flush=True)
+                logger.info(f"[{_ts_now()}] >>> Session {s.sid} 串行环节结束 (elapsed={ts_end_session:.2f}s)")
 
         t_done = time.monotonic() - t0
         logger.info(
-            f"[{_ts_now()}] >>> 所有请求均已完成 (总耗时={t_done:.2f}s)",
-            file=sys.stderr,
-            flush=True,
-        )
+            f"[{_ts_now()}] >>> 所有请求均已完成 (总耗时={t_done:.2f}s)")
 
         # 预计事件时间锚打印
         if args.session_run_mode == "parallel":
             for s in specs:
                 logger.info(
-                    f"[预期] sid={s.sid} 在 +{s.ttl}s (≈{t_done + s.ttl:.1f}s 起) 触发 remove_session",
-                    file=sys.stderr,
-                )
+                    f"[预期] sid={s.sid} 在 +{s.ttl}s (≈{t_done + s.ttl:.1f}s 起) 触发 remove_session")
             logger.info(
                 f"[预期] 最长 sid={max(specs, key=lambda x: x.ttl).sid} 到期后 +{args.service_ttl}s "
-                f"(≈{t_done + base_ttl + args.service_ttl:.1f}s) pod 转 idle 并被回收/删除",
-                file=sys.stderr,
-                flush=True,
-            )
+                f"(≈{t_done + base_ttl + args.service_ttl:.1f}s) pod 转 idle 并被回收/删除")
         else:
             logger.info(
                 f"[预期] Pod 将在最后一个 Session (sid={specs[-1].sid}) 结束后的 TTL 到期并转 idle\n"
-                f"[预期] 预计回收时间点：≈{t_done + base_ttl + args.service_ttl:.1f}s",
-                file=sys.stderr, flush=True
-            )
+                f"[预期] 预计回收时间点：≈{t_done + base_ttl + args.service_ttl:.1f}s")
 
     finally:
         await access.shutdown()
@@ -567,7 +530,7 @@ async def _amain() -> int:
 
 
 def main() -> None:
-    raise ValueError(asyncio.run(_amain()))
+    asyncio.run(_amain())
 
 
 if __name__ == "__main__":
