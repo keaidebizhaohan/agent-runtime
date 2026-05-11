@@ -193,7 +193,8 @@ class IAccess(ABC):
 
     @abstractmethod
     async def update_config(
-            self, config: "AccessConfig", session_config: Optional["SessionConfig"] = None
+            self, config: "AccessConfig", session_config: Optional["SessionConfig"] = None,
+            strategy: Optional["ISessionStrategy"] = None,
     ) -> None:
         """运行时热更新配置。存量 session/service 不变，新建的使用新值。"""
         pass
