@@ -108,3 +108,21 @@ class DBHandler(ABC):
             记录列表
         """
         pass
+
+    @abstractmethod
+    async def count_records(
+        self,
+        table_name: str,
+        filters: Optional[dict] = None,
+    ) -> int:
+        """
+        统计满足条件的记录条数（等价于 ``SELECT COUNT(*)`` 语义）。
+
+        Args:
+            table_name: 表名
+            filters: 过滤条件；为 ``None`` 或空字典时表示全表计数
+
+        Returns:
+            记录条数
+        """
+        pass

@@ -186,3 +186,12 @@ class RedisHandler(DBHandler):
                     records.append(record)
 
         return records
+
+    async def count_records(
+        self,
+        table_name: str,
+        filters: Optional[dict] = None,
+    ) -> int:
+        """与 ``list_records`` 相同的过滤语义；通过遍历列表键计数（大数据量时慎用）。"""
+        records = await self.list_records(table_name, filters, limit=2**31 - 1, offset=0)
+        return len(records)

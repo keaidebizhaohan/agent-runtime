@@ -5,10 +5,10 @@ from datetime import datetime
 import logging
 from typing import Optional, Any
 import json
-from sqlalchemy import Column, Integer, String, DateTime, JSON, Boolean, create_engine, text, inspect
+from sqlalchemy import Column, Integer, String, DateTime, JSON, Boolean, Float, create_engine, text, inspect
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
-from sqlalchemy import select, update, delete
+from sqlalchemy import select, update, delete, func
 
 from ..log import get_logger
 from .handler import DBHandler
@@ -68,6 +68,11 @@ class SQLAlchemyHandler(DBHandler):
             "json": JSON,
             "boolean": Boolean,
             "bool": Boolean,
+            "float": Float,
+            "double": Float,
+            "decimal": Float,
+            "number": Float,
+            "real": Float,
         }
         sa_type = type_map.get(data_type.lower(), String)
         if sa_type == String and length:
@@ -92,6 +97,8 @@ class SQLAlchemyHandler(DBHandler):
             return "JSON"
         if data_type in {"boolean", "bool"}:
             return "BOOLEAN"
+        if data_type in {"float", "double", "decimal", "number", "real"}:
+            return "FLOAT"
         return "VARCHAR"
 
     @staticmethod
@@ -291,3 +298,29 @@ class SQLAlchemyHandler(DBHandler):
             records = list(result.scalars().all())
             logger.debug("Records listed: table=%s, count=%s", table_name, len(records))
             return records
+
+    async def count_records(
+        self,
+        table_name: str,
+        filters: Optional[dict] = None,
+    ) -> int:
+        logger.debug(
+            "Counting records: table=%s, filters=%s",
+            table_name,
+            filters,
+        )
+        model = self._table_models.get(table_name)
+        if not model:
+            logger.error("Table not initialized: table=%s", table_name)
+            raise ValueError(f"Table {table_name} not initialized")
+
+        stmt = select(func.count()).select_from(model)
+        if filters:
+            for key, value in filters.items():
+                stmt = stmt.where(getattr(model, key) == value)
+
+        async with await self._get_session() as session:
+            result = await session.execute(stmt)
+            n = int(result.scalar_one())
+            logger.debug("Records counted: table=%s, count=%s", table_name, n)
+            return n

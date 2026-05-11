@@ -1,22 +1,35 @@
 # coding: utf-8
 # Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
 
-import os
+from typing import Optional
+from urllib.parse import quote_plus
+
 from .sqlalchemy_handler import SQLAlchemyHandler
 from ..config import settings
 
 
 class MySQLHandler(SQLAlchemyHandler):
-    """MySQL数据库句柄"""
+    """MySQL数据库句柄
+
+    连接参数可在构造函数中显式传入；未传入的字段使用 ``settings``（环境变量）中的值。
+    """
 
     def __init__(
-        self
-    ):
-        self.host = settings.RUNTIME_DB_HOST
-        self.port = settings.RUNTIME_DB_PORT
-        self.database = settings.RUNTIME_DB_NAME
-        self.user = settings.RUNTIME_DB_USER
-        self.password = settings.RUNTIME_DB_PASSWORD
+        self,
+        host: Optional[str] = None,
+        port: Optional[int] = None,
+        database: Optional[str] = None,
+        user: Optional[str] = None,
+        password: Optional[str] = None,
+    ) -> None:
+        self.host = host if host is not None else settings.DB_HOST
+        self.port = port if port is not None else settings.DB_PORT
+        self.database = database if database is not None else settings.DB_NAME
+        self.user = user if user is not None else settings.DB_USER
+        self.password = password if password is not None else settings.DB_PASSWORD
 
-        database_url = f"mysql+aiomysql://{self.user}:{self.password}@{self.host}:{self.port}/{self.database}"
+        database_url = (
+            f"mysql+aiomysql://{quote_plus(self.user or '')}:{quote_plus(self.password or '')}"
+            f"@{self.host}:{self.port}/{self.database}"
+        )
         super().__init__(database_url)
