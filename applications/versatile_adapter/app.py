@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import os
 import sys
+import uuid
 from contextlib import asynccontextmanager
 
 from a2a.server.request_handlers import DefaultRequestHandler
@@ -36,6 +37,28 @@ from adapter.versatile_proxy import VersatileProxy
 os.environ['NO_PROXY'] = 'localhost,127.0.0.1'
 
 
+def dynamic_format(record) -> str:
+    if len(record["extra"]) == 0:
+        return "<green>{time:YYYY-MM-DD HH:mm:ss}</green> \x01 " \
+                   "<level>{level: <8}</level> \x01 " \
+                   "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> \x01 " \
+                   "<level>{message}</level> \n"
+    elif "conv_id" in record["extra"]:
+        return "<green>{time:YYYY-MM-DD HH:mm:ss}</green> \x01 " \
+                   "<level>{level: <8}</level> \x01 " \
+                   "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> \x01 " \
+                   "<cyan>{extra[trace_id]}</cyan> \x01 " \
+                   "<cyan>{extra[agent_id]}</cyan> \x01 " \
+                   "<cyan>{extra[conv_id]}</cyan> \x01 " \
+                   "<level>{message}</level>\n"
+    else:
+        return "<green>{time:YYYY-MM-DD HH:mm:ss}</green> \x01 " \
+                   "<level>{level: <8}</level> \x01 " \
+                   "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> \x01 " \
+                   "<cyan>{extra[trace_id]}</cyan> \x01 " \
+                   "<level>{message}</level>\n"
+
+
 def setup_logging() -> None:
     """配置日志"""
     settings = get_settings()
@@ -45,10 +68,8 @@ def setup_logging() -> None:
     logger.add(
         sys.stderr,
         level=settings.adapter_log_level.upper() if settings.adapter_log_level else "INFO",
-        format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | "
-               "<level>{level: <8}</level> | "
-               "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> | "
-               "<level>{message}</level>"
+        format=dynamic_format,
+        filter=lambda record: len(record["extra"]) == 0 or "trace_id" in record["extra"]
     )
 
     if settings.adapter_log_file:
@@ -64,13 +85,16 @@ def setup_logging() -> None:
             rotation="100 MB",
             retention="7 days",
             compression="gz",
-            format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | "
-                   "<level>{level: <8}</level> | "
-                   "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> | "
-                   "<level>{message}</level>"
+            format=dynamic_format,
+            filter=lambda record: len(record["extra"]) == 0 or "trace_id" in record["extra"]
         )
 
-    logger.configure(extra={"trace_id": "default_trace_id"})
+
+    logger.info(
+        f"[VersatileAdapter] 日志初始化完成 "
+        f"level={settings.adapter_log_level or 'INFO'} "
+        f"file={settings.adapter_log_file or '-'}"
+    )
 
 
 setup_logging()
@@ -83,6 +107,12 @@ async def lifespan(fastapi_app: FastAPI):
     versatile_proxy = VersatileProxy(
         url_template=settings.versatile_url_template,
         timeout=settings.versatile_timeout,
+        headers_template=settings.versatile_headers_template,
+    )
+
+    logger.info(
+        f"[VersatileAdapter] Versatile headers template keys: "
+        f"{sorted(settings.versatile_headers_template.keys())}"
     )
 
     executor = VersatileAdapterExecutor(
@@ -120,9 +150,20 @@ app = FastAPI(
 )
 
 
+@app.middleware("http")
+async def inject_trace_id(request, call_next):
+    trace_id = request.headers.get("x-trace-id") or uuid.uuid4().hex
+    logger.debug(f"接收到请求: {request.method} {request.url}，trace_id={trace_id}")
+    with logger.contextualize(trace_id=trace_id):
+        response = await call_next(request)
+    response.headers["x-trace-id"] = trace_id
+    return response
+
+
 @app.get("/health", tags=["Health"])
 async def health_check():
     """服务健康检查"""
+    logger.debug("[VersatileAdapter] health check")
     return {
         "status": "healthy",
         "service": "VersatileAdapter",

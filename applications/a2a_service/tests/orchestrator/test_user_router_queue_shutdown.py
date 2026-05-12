@@ -160,3 +160,39 @@ def test_log_outbound_sse_payload_byte_length_handles_multibyte(loguru_records):
     assert info
     expected_bytes = len(payload.encode("utf-8"))
     assert f"bytes={expected_bytes}" in info[-1]["message"]
+
+
+def test_log_outbound_sse_includes_full_payload(loguru_records):
+    """SSE 出栈日志在 DEBUG 级别下应把整段 payload 原文打出来，便于现场排障对照前端帧形态。
+
+    生产 INFO 级别保持轻量（仅 conv/#/kind/bytes 元数据），避免每帧 payload 全量
+    落盘把日志刷爆；DEBUG 级别补一条 payload 明细行，通过 ``#sequence`` 与
+    INFO 行关联。开发联调或问题复盘时把 log_level 调到 DEBUG 即可看到完整报文。
+    """
+    payload = '{"custom_rsp_data":{"event":"message","data":{"node_type":"Start"}}}'
+    log_outbound_sse(
+        conversation_id="conv-x",
+        sequence=7,
+        payload=payload,
+        event_kind="TaskArtifactUpdateEvent",
+    )
+
+    # INFO 行不应携带 payload 原文，避免生产日志被 SSE 报文刷爆
+    info = [r for r in loguru_records if r["level"].name == "INFO"]
+    assert info, "expected at least one INFO record"
+    info_msg = info[-1]["message"]
+    assert f"payload={payload}" not in info_msg, (
+        f"INFO message should NOT contain full payload (keep INFO lightweight); "
+        f"got: {info_msg!r}"
+    )
+
+    # DEBUG 行通过 #sequence 关联到对应 INFO 行，并携带完整 payload
+    debug = [r for r in loguru_records if r["level"].name == "DEBUG"]
+    assert debug, "expected at least one DEBUG record"
+    debug_msg = debug[-1]["message"]
+    assert "#7" in debug_msg, (
+        f"DEBUG message should carry sequence marker for correlation; got: {debug_msg!r}"
+    )
+    assert f"payload={payload}" in debug_msg, (
+        f"DEBUG message should contain full payload; got: {debug_msg!r}"
+    )

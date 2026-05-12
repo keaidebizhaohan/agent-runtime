@@ -27,6 +27,32 @@ _CONVERSATION_ID_CTX: contextvars.ContextVar[str] = contextvars.ContextVar(
     "applications_logger_conversation_id", default="unknown"
 )
 
+# 审计日志中需要脱敏的敏感字段名（统一使用小写匹配）
+_SENSITIVE_KEYS = {
+    "api_key", "apikey", "token", "access_token", "refresh_token",
+    "password", "secret", "authorization", "cust-token",
+}
+
+
+def mask_sensitive_fields(payload: Any) -> Any:
+    """对 dict / list 结构做递归脱敏，命中 _SENSITIVE_KEYS 的字段值替换为 '***'。
+
+    供入参/出参/链路 chunk 等一切落日志的结构化数据复用，统一脱敏口径。
+    """
+    if isinstance(payload, dict):
+        return {
+            k: ("***" if isinstance(k, str) and k.lower() in _SENSITIVE_KEYS
+                else mask_sensitive_fields(v))
+            for k, v in payload.items()
+        }
+    if isinstance(payload, list):
+        return [mask_sensitive_fields(v) for v in payload]
+    return payload
+
+
+# 兼容历史调用：保留私有别名（原 build_http_request_tag_context 内调用方式不变）
+_mask_sensitive_fields = mask_sensitive_fields
+
 
 class TagTrace(BaseModel):
     id: Optional[str] = None # trace_id
@@ -83,18 +109,30 @@ class TagObservation(BaseModel):
 
 
 class Tag(StrEnum):
-    TAG_HTTP_REQUEST_START = "HTTP_REQUEST_START"
-    TAG_HTTP_REQUEST_END = "HTTP_REQUEST_END"
-    TAG_AGENT_INIT_TOOLLIST = "AGENT_INIT_TOOLLIST"
-    TAG_LLM_CALL_START = "LLM_CALL_START"
-    TAG_LLM_CALL_END = "LLM_CALL_END"
-    TAG_PLANNING_DECISION = "PLANNING_DECISION"
-    TAG_TODOLIST_QUERY = "TODOLIST_QUERY"
-    TAG_TODOLIST_SAVE = "TODOLIST_SAVE"
-    TAG_SKILL_EXECUTE_START = "SKILL_EXECUTE_START"
-    TAG_SKILL_EXECUTE_END = "SKILL_EXECUTE_END"
-    TAG_VERSATILE_START = "VERSATILE_START"
-    TAG_VERSATILE_END = "VERSATILE_END"
+    TAG_HTTP_REQUEST_START = "TAG_HTTP_REQUEST_START"
+    TAG_HTTP_REQUEST_END = "TAG_HTTP_REQUEST_END"
+    TAG_AGENT_INIT_TOOLLIST = "TAG_AGENT_INIT_TOOLLIST"
+    TAG_LLM_CALL_START = "TAG_LLM_CALL_START"
+    TAG_LLM_CALL_FIRST_TOKEN = "TAG_LLM_CALL_FIRST_TOKEN"       # 大模型首TOKEN返回
+    TAG_LLM_CALL_STREAM_TOKEN = "TAG_LLM_CALL_STREAM_TOKEN"     # 大模型流式TOKEN返回
+    TAG_LLM_CALL_END = "TAG_LLM_CALL_END"                       # 大模型调用结束
+    TAG_LLM_CALL_STATISTICS = "TAG_LLM_CALL_STATISTICS"         # 大模型调用统计
+    TAG_PLANNING_DECISION = "TAG_PLANNING_DECISION"             # 大模型规划任务执行
+    TAG_TODOLIST_QUERY = "TAG_TODOLIST_QUERY"
+    TAG_TODOLIST_SAVE = "TAG_TODOLIST_SAVE"                     # 任务执行完毕保存状态
+    TAG_SKILL_EXECUTE_START = "TAG_SKILL_EXECUTE_START"
+    TAG_SKILL_EXECUTE_END = "TAG_SKILL_EXECUTE_END"
+    TAG_TOOL_EXECUTE_START = "TAG_TOOL_EXECUTE_START"
+    TAG_TOOL_EXECUTE_END = "TAG_TOOL_EXECUTE_END"
+    TAG_VERSATILE_START = "TAG_VERSATILE_START"                 # Versatile调用开始
+    TAG_VERSATILE_CHUNK = "TAG_VERSATILE_CHUNK"                 # Versatile流式chunk返回
+    TAG_VERSATILE_END = "TAG_VERSATILE_END"                     # Versatile调用结束
+    TAG_CUSTOM = "TAG_CUSTOM"                                   # 自定义的不确定，用于临时打日志调试
+
+
+class ResultEnum(StrEnum):
+    SUCCESS = "success"
+    FAILED = "failed"
 
 
 class Extra(BaseModel):
@@ -102,8 +140,16 @@ class Extra(BaseModel):
     cost: Optional[int] = None
     source: Optional[str] = None
     user: Optional[str] = None
-    result: Optional[str] = None
+    result: Optional[ResultEnum] = None
     terminal: Optional[str] = None
+
+
+class Level(StrEnum):
+    CRITICAL = "CRITICAL"
+    ERROR = "ERROR"
+    WARNING = "WARNING"
+    INFO = "INFO"
+    DEBUG = "DEBUG"
 
 
 @dataclass(frozen=True)
@@ -123,14 +169,62 @@ class HttpRequestTagContext:
     user_id: str
 
 
-def to_logger(level: int | str = logging.INFO, message: Any = "", extra: Extra | None = None):
+# def to_logger(level: str = Level.INFO, message: Any = "", extra: Extra | None = None):
+#     if extra is not None:
+#         if isinstance(message, BaseModel):
+#             message = message.model_dump_json(exclude_none=True)
+#         with logger.contextualize(**extra.model_dump(exclude_none=True)):
+#             logger.log(level, message)
+#     else:
+#         logger.log(level, message)
+
+
+def to_logger(level: str = Level.INFO, message: Any = "",
+              extra: Extra | None = None,
+              log_context: LogContext | None = None):
+    """
+    记录日志，支持直接传入 log_context 而不需要使用 with bind_context() 语法。
+    Args:
+        level: 日志级别
+        message: 日志消息
+        extra: 额外的日志字段
+        log_context: 日志上下文（包含 trace_id, agent_id, conversation_id）
+    """
+    # 构建 contextualize 的参数
+    context_params = {}
+
+    # 如果提供了 log_context，将上下文信息添加到 contextualize 参数中
+    if log_context is not None:
+        context_params.update({
+            "trace_id": log_context.trace_id,
+            "agent_id": log_context.agent_id,
+            "conversation_id": log_context.conversation_id,
+        })
+
+    # 如果有 extra 字段，合并到上下文参数中
     if extra is not None:
+        extra_dict = extra.model_dump(exclude_none=True)
+        context_params.update(extra_dict)
+
+        # 如果 message 是 BaseModel，转换为 JSON
         if isinstance(message, BaseModel):
             message = message.model_dump_json(exclude_none=True)
-        with logger.contextualize(**extra.model_dump(exclude_none=True)):
-            logger.log(level, message)
+
+    # 使用 logger.contextualize 添加所有上下文和额外字段
+    if context_params:
+        with logger.contextualize(**context_params):
+            logger.opt(depth=1).log(level, message)
     else:
-        logger.log(level, message)
+        logger.opt(depth=1).log(level, message)
+
+
+def get_real_ip(request: Request):
+    x_forwarded_for = request.headers.get("x-forwarded-for")
+    if x_forwarded_for:
+        client_ip = x_forwarded_for.split(",")[0].strip()
+    else:
+        client_ip = request.client.host
+    return client_ip
 
 
 def current_local_time() -> str:
@@ -198,11 +292,16 @@ async def build_http_request_tag_context(
             if "application/json" in content_type:
                 try:
                     request_body_snapshot = json.loads(raw_body_text)
+                    request_body_snapshot = _mask_sensitive_fields(request_body_snapshot)
                 except Exception:
+                    logger.exception("[logger] 请求 body JSON 解析失败")
                     request_body_snapshot = {"raw_body": raw_body_text}
+                    request_body_snapshot = _mask_sensitive_fields(request_body_snapshot)
             else:
                 request_body_snapshot = {"raw_body": raw_body_text}
+                request_body_snapshot = _mask_sensitive_fields(request_body_snapshot)
     except Exception:
+        logger.exception("[logger] 请求 body 读取失败")
         request_body_snapshot = {"raw_body": "<unavailable>"}
 
     user_id = extract_header_value(
@@ -261,6 +360,7 @@ def build_versatile_start_observation(
             "request_header": request_headers,
             "request_body": request_body,
         },
+        status_message=0,
     )
 
 
@@ -271,6 +371,7 @@ def build_versatile_end_observation(
     output_payload: dict[str, Any],
     status_message: Any,
     duration_ms: int,
+    start_time: int,
 ) -> TagObservation:
     trace_id, _, _ = current_tag_context()
     return TagObservation(
@@ -278,8 +379,11 @@ def build_versatile_end_observation(
         trace_id=trace_id,
         type=ObservationType.TOOL,
         name=name,
+        start_time=datetime.fromtimestamp(int(start_time / 1000)).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3],
         end_time=current_local_time(),
         output=output_payload,
         status_message=status_message,
         total_cost=max(duration_ms, 0),
     )
+
+

@@ -5,9 +5,28 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, Optional
 
+from pydantic import Json
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+# 调用 Versatile 时默认注入的请求头（JSON 字符串，会被 Json[...] 字段解析）。
+#
+# 默认值仅放跨环境通用的非鉴权头（Accept / stream），**不含 Cookie**：
+# 把环境特定的 Session token（如 ``AGENT_SID=...``）钉死在代码里，跨环境共用同
+# 一份代码时会触发 VA "URL.project_id ↔ token.project_id mismatch" 的 403
+# （c1a46ad 引入、随后由本次重构纠正）。
+#
+# 需要 Cookie 的部署，在 `.env` 或环境变量里设置 ``VERSATILE_HEADERS_TEMPLATE``
+# 显式注入：
+#
+#     VERSATILE_HEADERS_TEMPLATE={"Cookie":"AGENT_SID=<your_token>",\
+#         "Accept":"application/json, text/event-stream","stream":"true"}
+_DEFAULT_VERSATILE_HEADERS_TEMPLATE = (
+    '{"Accept":"application/json, text/event-stream",'
+    '"stream":"true"}'
+)
 
 
 class Settings(BaseSettings):
@@ -23,6 +42,7 @@ class Settings(BaseSettings):
     # ── Versatile 低码平台 ───────────────────────────────────────────────────
     versatile_url_template: Optional[str] = None
     versatile_timeout: Optional[int] = None
+    versatile_headers_template: Json[Dict[str, Any]] = _DEFAULT_VERSATILE_HEADERS_TEMPLATE
 
     # ── FastAPI ─────────────────────────────────────────────────────────────
     adapter_fastapi_host: Optional[str] = None

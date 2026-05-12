@@ -16,10 +16,11 @@ Task 状态流转（存于 RedisTaskStore）：
 """
 from __future__ import annotations
 
+import json
 import time
 import uuid
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Optional
 
 from a2a.client import Client
 from a2a.server.agent_execution import AgentExecutor, RequestContext
@@ -33,8 +34,10 @@ from a2a.types.a2a_pb2 import (
     TaskArtifactUpdateEvent,
     TaskStatus,
     TaskStatusUpdateEvent,
+    ROLE_AGENT,
     ROLE_USER,
     TASK_STATE_COMPLETED,
+    TASK_STATE_FAILED,
     TASK_STATE_INPUT_REQUIRED,
     TASK_STATE_WORKING,
 )
@@ -54,7 +57,9 @@ from common.logger import (
     Tag,
     build_versatile_end_observation,
     build_versatile_start_observation,
+    mask_sensitive_fields,
     to_logger,
+    Level
 )
 from common.redis_client import RedisClient
 from config import get_settings
@@ -62,6 +67,42 @@ from orchestrator.agent_adapter import agent_event_to_a2a
 from common.redis_task_store import RedisTaskStore
 
 _TTL = 1800
+
+
+def _safe_dump_event(event: Any) -> str:
+    """把 a2a 事件（protobuf）序列化为 JSON 字符串，应用敏感字段脱敏。
+
+    序列化失败时返回错误占位符，保证调用方拿到的永远是 ``str``，
+    便于落 DEBUG 日志而不影响主链路。
+    """
+    try:
+        return json.dumps(
+            mask_sensitive_fields(MessageToDict(event)),
+            ensure_ascii=False,
+        )
+    except Exception as dump_exc:
+        return f"<dump failed: {dump_exc}>"
+
+
+def _log_va_chunk_debug(stream_resp_count: int, event: Any) -> None:
+    """DEBUG 级埋点：打印 a2a_service 从 VersatileAdapter 接收到的每一帧 chunk 内容。
+
+    使用 ``logger.opt(lazy=True)`` 延迟求值：DEBUG 未启用时不会触发 MessageToDict
+    与 json.dumps，避免在生产 INFO 级别下白白消耗 CPU。
+    """
+    # logger.opt(lazy=True).debug(
+    #     "[Executor] [VersatileProxy] chunk #{} payload={}",
+    #     lambda c=stream_resp_count: c,
+    #     lambda e=event: _safe_dump_event(e),
+    # )
+    to_logger(
+        level=Level.DEBUG,
+        message={
+            "stream_resp_count": stream_resp_count,
+            "content": _safe_dump_event(event),
+        },
+        extra=Extra(tag=Tag.TAG_VERSATILE_CHUNK, cost=0),
+    )
 
 
 def _rewrite_recommend_delegate(intent: str, task_description: str) -> tuple[str, str]:
@@ -104,6 +145,8 @@ class _VaRequestPayload:
     params: Optional[dict] = None
     task_id: str = ""
     conv_id: str = ""
+    trace_id: str = ""
+    agent_id: str = ""
 
 
 class Executor(AgentExecutor):
@@ -254,7 +297,7 @@ class Executor(AgentExecutor):
                     f"[Executor] DelegateRequest → {event.intent}: "
                     f"{event.task_description!r:.60}"
                 )
-                va_result, va_task_id = await self._call_versatile_adapter(
+                va_result, va_task_id, finalized = await self._call_versatile_adapter(
                     turn_ctx,
                     delegate=event,
                 )
@@ -266,6 +309,9 @@ class Executor(AgentExecutor):
                         cascade_result=va_result,
                         step_counter=step_counter,
                     )
+                elif finalized:
+                    # VA 上游报错路径：_call_versatile_adapter 已写 FAILED + 推 FAILED 事件
+                    pass
                 else:
                     # VA 未完成：将 va_task_id 写入 Task metadata，状态改为 INPUT_REQUIRED
                     task = await self._task_store.get(task_id, call_context)
@@ -325,6 +371,8 @@ class Executor(AgentExecutor):
                 "headers": payload.headers,
                 "body": payload.body,
                 "params": payload.params or {},
+                "trace_id": payload.trace_id,
+                "agent_id": payload.agent_id,
             }
         )
         data_value = Value()
@@ -379,6 +427,86 @@ class Executor(AgentExecutor):
             return node
         return None
 
+    def _extract_upstream_error(self, event: TaskArtifactUpdateEvent) -> Optional[dict]:
+        """识别 VA 上游错误终态帧。
+
+        AgentEngine ``versatile_proxy.py:336`` 把 ``event=='exception'`` 视为
+        workflow_complete 终态。这里把 ``event in ("error", "exception")`` 都识别
+        为终态错误，返回 data 部分（含 code/message）；非错误帧返回 None。
+
+        识别后 Executor 应把 Task 标 FAILED 并清空 ``va_task_id``，避免下次请求被
+        当成 cascade 续轮、用 stale task_id 调 VA 锁死 conversation。
+        """
+        for part in event.artifact.parts:
+            if part.WhichOneof("content") != "data":
+                continue
+            frame = MessageToDict(part.data)
+            if not isinstance(frame, dict):
+                continue
+            if frame.get("event") in ("error", "exception"):
+                inner = frame.get("data")
+                return inner if isinstance(inner, dict) else {}
+        return None
+
+    @staticmethod
+    def _format_upstream_error(err: dict) -> str:
+        """把上游 error/exception 的 data 拼成可展示的错误描述字符串。"""
+        code = err.get("code")
+        message = err.get("message") or err.get("msg") or ""
+        if code:
+            return f"执行报错，错误码：{code}，错误信息：{message}"
+        return message or "VA 上游报错"
+
+    def _build_failed_status_event(
+        self, task_id: str, conv_id: str, error_text: str
+    ) -> TaskStatusUpdateEvent:
+        """构造带错误描述的 ``TaskStatusUpdateEvent(FAILED)``。
+
+        ``status.message.parts[0].text`` 由 user_router._extract_event_meta 转为
+        前端可见的 ``custom_rsp_data.event=interrupt_start`` 帧的 content/error 字段。
+        """
+        msg = Message(
+            role=ROLE_AGENT,
+            message_id=str(uuid.uuid4()),
+            task_id=task_id,
+            context_id=conv_id,
+            parts=[Part(text=error_text)],
+        )
+        return TaskStatusUpdateEvent(
+            task_id=task_id,
+            context_id=conv_id,
+            status=TaskStatus(state=TASK_STATE_FAILED, message=msg),
+        )
+
+    async def _finalize_failed(
+        self,
+        turn_ctx: _TurnContext,
+        upstream_error: dict,
+    ) -> None:
+        """VA 上游报错统一收尾：task FAILED + 清 va_task_id + enqueue FAILED 事件。
+
+        让下次同 conv_id 请求重新走首轮（不再走续轮路径用 stale va_task_id 调 VA），
+        破解原 INPUT_REQUIRED 路径下的 conversation 锁死。
+        """
+        task_id = turn_ctx.task_id
+        conv_id = turn_ctx.conv_id
+        error_text = self._format_upstream_error(upstream_error)
+
+        task = await self._task_store.get(task_id, turn_ctx.call_context)
+        if task:
+            task.metadata.update({"va_task_id": ""})
+            task.status.CopyFrom(TaskStatus(state=TASK_STATE_FAILED))
+            await self._task_store.save(task, turn_ctx.call_context)
+
+        await turn_ctx.event_queue.enqueue_event(
+            self._build_failed_status_event(task_id, conv_id, error_text),
+        )
+        logger.warning(
+            f"[Executor] VA 上游报错，task FAILED：conv={conv_id}, "
+            f"code={upstream_error.get('code')}, "
+            f"msg={(upstream_error.get('message') or '')!r:.80}"
+        )
+
     def _is_suppressed_node(self, event: TaskArtifactUpdateEvent) -> bool:
         """判断该 artifact 是否为配置中需要屏蔽的节点（不推送给用户）。"""
         target = get_settings().va_workflow_result_node
@@ -402,8 +530,15 @@ class Executor(AgentExecutor):
         self,
         turn_ctx: _TurnContext,
         delegate: DelegateRequest,
-    ) -> tuple[Optional[dict], Optional[str]]:
-        """DPA 委托场景：从 Redis 取首轮缓存，替换 query/intent 后发给 VA。"""
+    ) -> tuple[Optional[dict], str, bool]:
+        """DPA 委托场景：从 Redis 取首轮缓存，替换 query/intent 后发给 VA。
+
+        Returns: ``(cascade, va_task_id, finalized)``。
+            - ``cascade`` 非 None 时上层走 cascade 续轮；
+            - ``finalized=True`` 表示 VA 上游报错路径已在内部把 Task 标 FAILED 并
+              enqueue TaskStatusUpdateEvent(FAILED)，上层应直接 ``return``，
+              不再走 INPUT_REQUIRED 分支（避免覆盖 FAILED 状态、避免锁死 conv_id）。
+        """
         conv_id = turn_ctx.conv_id
         event_queue = turn_ctx.event_queue
 
@@ -411,6 +546,7 @@ class Executor(AgentExecutor):
         headers = cached.get("headers", {})
         body = dict(cached.get("body", {}))
         params = cached.get("params", {})
+        trace_id = cached.get("trace_id", "")
 
         effective_intent, effective_query = _rewrite_recommend_delegate(
             delegate.intent,
@@ -448,6 +584,9 @@ class Executor(AgentExecutor):
 
         va_real_task_id: Optional[str] = None
         continuation_task_id = ""
+        
+        # 从 delegate.target_agent 获取 agent_id
+        agent_id = delegate.target_agent or ""
 
         request = self._build_va_message(
             _VaRequestPayload(
@@ -457,12 +596,15 @@ class Executor(AgentExecutor):
                 params=params,
                 task_id="",
                 conv_id=conv_id,
+                trace_id=trace_id,
+                agent_id=agent_id,
             )
         )
 
         has_end_node = False
         final_result: dict | None = None
         qa_result: Optional[str] = None
+        upstream_error: Optional[dict] = None
         stream_resp_count = 0
         forwarded_count = 0
         suppressed_count = 0
@@ -492,6 +634,9 @@ class Executor(AgentExecutor):
                         f"解析为 None，跳过"
                     )
                     continue
+
+                # DEBUG 级：打印从 VersatileAdapter 接收到的整帧报文（步骤 7 首轮路径）
+                _log_va_chunk_debug(stream_resp_count, event)
 
                 if va_real_task_id is None and hasattr(event, "task_id") and event.task_id:
                     va_real_task_id = event.task_id
@@ -530,6 +675,14 @@ class Executor(AgentExecutor):
                             "[Executor] [VersatileProxy] 检测到 End node，将进入 cascade 路径"
                         )
 
+                    if upstream_error is None:
+                        err = self._extract_upstream_error(event)
+                        if err is not None:
+                            upstream_error = err
+                            logger.debug(
+                                "[Executor] [VersatileProxy] 检测到 VA 上游错误终态帧"
+                            )
+
         except Exception as e:
             status_message = 1
             error_message = str(e)
@@ -553,6 +706,7 @@ class Executor(AgentExecutor):
                     output_payload=output_payload,
                     status_message=status_message,
                     duration_ms=duration_ms,
+                    start_time=call_started_ms,
                 ),
                 extra=Extra(tag=Tag.TAG_VERSATILE_END, cost=max(duration_ms, 0)),
             )
@@ -566,12 +720,16 @@ class Executor(AgentExecutor):
             logger.info(
                 f"[Executor] VA end node: conv={conv_id}, qa_result={qa_result!r:.60}"
             )
-            return cascade, continuation_task_id
+            return cascade, continuation_task_id, False
+
+        if upstream_error is not None:
+            await self._finalize_failed(turn_ctx, upstream_error)
+            return None, "", True
 
         logger.info(
             f"[Executor] VA 无 end node: conv={conv_id}, va_task={continuation_task_id}"
         )
-        return None, continuation_task_id
+        return None, continuation_task_id, False
 
     async def _continue_versatile_adapter(
         self,
@@ -590,6 +748,8 @@ class Executor(AgentExecutor):
         # params 仍从 Redis 首轮缓存取（保留 HEAD 的 params URL query 参数透传）
         cached = await self._redis.get_json(session_request_key(conv_id)) or {}
         params = cached.get("params", {})
+        trace_id = cached.get("trace_id", "")
+        agent_id = cached.get("agent_id", "")
         # 对齐 YGQ：续轮直接使用当前请求携带的 body，确保 buyStatus/tranNo 等
         # 当前轮输入能透传给下游工作流，而不是回退到首轮缓存 body。
         body = dict(original_body)
@@ -601,7 +761,7 @@ class Executor(AgentExecutor):
         call_started_ms = int(time.time() * 1000)
         status_message = 0
         error_message: Optional[str] = None
-
+        
         request = self._build_va_message(
             _VaRequestPayload(
                 query=user_input,
@@ -610,12 +770,15 @@ class Executor(AgentExecutor):
                 params=params,
                 task_id=va_task_id,
                 conv_id=conv_id,
+                trace_id=trace_id,
+                agent_id=agent_id,
             )
         )
 
         has_end_node = False
         final_result: dict | None = None
         qa_result: Optional[str] = None
+        upstream_error: Optional[dict] = None
         stream_resp_count = 0
 
         # 续轮调用前打点，记录本次输入上下文
@@ -636,6 +799,9 @@ class Executor(AgentExecutor):
                 if event is None:
                     continue
 
+                # DEBUG 级：打印从 VersatileAdapter 接收到的整帧报文（步骤 7 续轮路径）
+                _log_va_chunk_debug(stream_resp_count, event)
+
                 if isinstance(event, TaskArtifactUpdateEvent):
                     if not self._is_suppressed_node(event):
                         await event_queue.enqueue_event(event)
@@ -648,6 +814,11 @@ class Executor(AgentExecutor):
                     if result is not None:
                         has_end_node = True
                         final_result = result
+
+                    if upstream_error is None:
+                        err = self._extract_upstream_error(event)
+                        if err is not None:
+                            upstream_error = err
 
         except Exception as e:
             status_message = 1
@@ -671,6 +842,7 @@ class Executor(AgentExecutor):
                     output_payload=output_payload,
                     status_message=status_message,
                     duration_ms=duration_ms,
+                    start_time=call_started_ms,
                 ),
                 extra=Extra(tag=Tag.TAG_VERSATILE_END, cost=max(duration_ms, 0)),
             )
@@ -694,6 +866,9 @@ class Executor(AgentExecutor):
                 original_body=original_body,
                 cascade_result=cascade,
             )
+        elif upstream_error is not None:
+            # VA 续轮也报错：同样落 FAILED + 清空 va_task_id，破解 conv_id 锁死
+            await self._finalize_failed(turn_ctx, upstream_error)
         else:
             # VA 仍未完成，继续挂起；va_task_id 不变
             task = await self._task_store.get(task_id, call_context)

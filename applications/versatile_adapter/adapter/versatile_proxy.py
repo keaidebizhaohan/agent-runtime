@@ -15,6 +15,10 @@ from loguru import logger
 
 _FORWARD_HEADER_WHITELIST = {
     "x-user-id", "x-project-id", "cust-token", "cust-userid",
+    # 允许上游动态覆盖模板里的 Cookie（用户级 AGENT_SID 等）
+    "cookie",
+    # 用于端到端的分布式追踪
+    "x-trace-id",
 }
 
 
@@ -53,9 +57,15 @@ def _unwrap_upstream_frame(outer: dict) -> dict:
 
 
 class VersatileProxy:
-    def __init__(self, url_template: str, timeout: int = 600) -> None:
+    def __init__(
+        self,
+        url_template: str,
+        timeout: int = 600,
+        headers_template: Optional[dict] = None,
+    ) -> None:
         self._url_template = url_template
         self._timeout = timeout
+        self._headers_template = dict(headers_template) if headers_template else {}
 
     def _build_url(self, conv_id: str) -> str:
         return self._url_template.format(conversation_id=conv_id)
@@ -71,6 +81,7 @@ class VersatileProxy:
                 json_body = _json.loads(body.decode('utf-8'))
                 cmd += f" -d '{_json.dumps(json_body, ensure_ascii=False)}'"
             except Exception:
+                logger.debug("[VersatileProxy] body 非 JSON，curl 命令使用 raw 字节回退")
                 cmd += f" -d '{body.decode('utf-8', errors='replace')}'"
         return cmd
 
@@ -80,7 +91,9 @@ class VersatileProxy:
         curl = self._generate_curl_command(request, body)
         banner_start = f"{'='*20} Proxy Request (Stream) Start {'='*20}"
         banner_end = f"{'='*20} Proxy Request (Stream) End {'='*20}"
-        logger.info("\n{}\n{}\n{}", banner_start, curl, banner_end)
+        logger.info("[VersatileProxy] {}", banner_start)
+        logger.info("[VersatileProxy] {}", curl)
+        logger.info("[VersatileProxy] {}", banner_end)
 
     async def dispatch_stream(
         self,
@@ -90,7 +103,8 @@ class VersatileProxy:
         params: Optional[dict] = None,
     ) -> AsyncGenerator[dict, None]:
         url = self._build_url(conv_id)
-        headers = {"Content-Type": "application/json"}
+        headers = dict(self._headers_template)
+        headers.setdefault("Content-Type", "application/json")
         if extra_headers:
             headers.update(
                 {k: v for k, v in extra_headers.items() if k.lower() in _FORWARD_HEADER_WHITELIST}
@@ -127,9 +141,18 @@ class VersatileProxy:
                 ) as response:
                     logger.info(f"[VersatileProxy] --- Proxy Response (Stream): {response.status_code} ---")
                     logger.debug(f"[VersatileProxy] Response Headers: {dict(response.headers)}")
+                    if response.is_error:
+                        # 在 stream 上下文内先读出响应体，便于在 raise 前打印错误正文，
+                        # 避免上下文退出后 e.response.text 不可读。
+                        body_bytes = await response.aread()
+                        body_text = body_bytes.decode("utf-8", errors="replace")
+                        logger.error(
+                            f"[VersatileProxy] HTTP {response.status_code} url={url} "
+                            f"body={body_text!r:.500}"
+                        )
                     response.raise_for_status()
                     async for line in response.aiter_lines():
-                        logger.info(f"[VersatileProxy] proxy received line: {line}]")
+                        logger.debug(f"[VersatileProxy] proxy received line: {line}]")
                         line = line.strip()
                         if not line:
                             continue
@@ -147,6 +170,12 @@ class VersatileProxy:
                         yield _unwrap_upstream_frame(outer)
 
         except httpx.HTTPStatusError as e:
-            logger.error(f"[VersatileProxy] HTTP 错误：{e.response.status_code} {url}")
+            # 详细错误正文已在 stream 上下文内记录，这里只补一条状态摘要
+            logger.error(
+                f"[VersatileProxy] HTTPStatusError 已记录："
+                f"{e.response.status_code} {url}"
+            )
+            raise
         except httpx.RequestError as e:
             logger.error(f"[VersatileProxy] 请求错误：{e}")
+            raise

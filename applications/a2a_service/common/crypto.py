@@ -3,8 +3,6 @@
 """
 a2a_service 侧配置敏感字段加解密（AES-GCM + HKDF-SHA256）。
 
-离线加解密脚本见 a2a_service/script/crypto/，与本模块算法一致。
-
 主密钥：环境变量 AES_MASTER_KEY（Base64 解码后须为 32 字节）。未设置时 encrypt/decrypt 对非密文透传。
 """
 
