@@ -26,6 +26,43 @@ _SERVER_SOURCE_IP: contextvars.ContextVar[str] = contextvars.ContextVar("interfa
 _TOOL_INTERFACE_T0: dict[str, float] = {}
 _RUNNER_TOOL_INTERFACE_REGISTERED = False
 
+_RUNNER_LLM_STREAM_INTERFACE_REGISTERED = False
+
+
+def _llm_stream_output_looks_terminal(*, result: Any) -> bool:
+    """判断是否为单次流式 HTTP 的收尾 payload（避免对 per_item 的每个 chunk 打 interface）。"""
+    if isinstance(result, list):
+        return True
+    if result is None:
+        return False
+    if getattr(result, "usage_metadata", None) is not None:
+        return True
+    fr = getattr(result, "finish_reason", None)
+    if fr is None:
+        return False
+    s = str(fr).strip().lower()
+    return bool(s) and s not in ("null", "none")
+
+
+def _model_name_from_configs(*, model_config: Any, model_client_config: Any) -> str:
+    if model_config is not None:
+        mn = getattr(model_config, "model_name", None)
+        if mn:
+            return str(mn)
+        m = getattr(model_config, "model", None)
+        if m:
+            return str(m)
+    return ""
+
+
+def _model_provider_str(model_client_config: Any) -> str:
+    if model_client_config is None:
+        return ""
+    cp = getattr(model_client_config, "client_provider", None)
+    if cp is None:
+        return ""
+    return str(getattr(cp, "value", cp))
+
 
 def set_request_context(*, request_id: str, source_ip: str = "") -> None:
     _REQUEST_ID.set(str(request_id or "").strip())
@@ -356,4 +393,57 @@ def install_runner_tool_interface_callbacks() -> None:
     fw.register_sync(ToolCallEvents.TOOL_CALL_ERROR, _on_tool_error, priority=-1000)
     _RUNNER_TOOL_INTERFACE_REGISTERED = True
     _LOG.info("Interface runner tool callbacks installed.")
+
+
+def install_runner_llm_stream_interface_callbacks() -> None:
+    """流式 LLM 成功结束时写一条 interface（补充 core 内 stream 无「API response received」日志的空档）。
+
+    Model.stream 对 LLM_STREAM_OUTPUT 使用 emit_after 默认 per_item，每个 chunk 触发一次；
+    仅在收尾 chunk（finish_reason / usage_metadata）或 once 模式下的 list 结果时记录，避免刷屏。
+    耗时固定为 0（不在此维护起止时钟）。流式失败由 core_log_bridge 写 interface。
+    """
+    global _RUNNER_LLM_STREAM_INTERFACE_REGISTERED
+    if _RUNNER_LLM_STREAM_INTERFACE_REGISTERED:
+        return
+
+    from openjiuwen.core.runner import Runner
+    from openjiuwen.core.runner.callback.events import LLMCallEvents
+
+    fw = Runner.callback_framework
+
+    async def _on_llm_stream_output(
+        *,
+        result: Any = None,
+        model_config: Any = None,
+        model_client_config: Any = None,
+        **_: Any,
+    ) -> None:
+        if not _llm_stream_output_looks_terminal(result=result):
+            return
+        mn = _model_name_from_configs(
+            model_config=model_config, model_client_config=model_client_config
+        )
+        prov = _model_provider_str(model_client_config)
+        add_info: dict[str, Any] = {
+            "source": "runner_callback",
+            "event_type": "llm_stream_end",
+            "is_stream": True,
+            "model_name": mn,
+            "model_provider": prov,
+        }
+        if isinstance(result, list):
+            add_info["chunk_count"] = len(result)
+        log_client(
+            interface_name="llm.call",
+            cost_ms=0.0,
+            ok=True,
+            return_code=0,
+            return_info="stream completed",
+            dest_ip="",
+            add_info=add_info,
+        )
+
+    fw.register_sync(LLMCallEvents.LLM_STREAM_OUTPUT, _on_llm_stream_output, priority=-1000)
+    _RUNNER_LLM_STREAM_INTERFACE_REGISTERED = True
+    _LOG.info("Interface runner LLM stream callbacks installed.")
 

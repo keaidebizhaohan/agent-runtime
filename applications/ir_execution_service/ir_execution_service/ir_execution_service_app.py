@@ -44,6 +44,7 @@ from .runtime_support.core_log_bridge import install_core_log_bridge
 from .runtime_support.interface_logger import (
     init_interface_logger_from_env,
     install_core_interface_sink,
+    install_runner_llm_stream_interface_callbacks,
     install_runner_tool_interface_callbacks,
     log_server,
     set_request_context,
@@ -58,6 +59,7 @@ install_runner_tool_alarm_callbacks()
 init_interface_logger_from_env()
 install_core_interface_sink()
 install_runner_tool_interface_callbacks()
+install_runner_llm_stream_interface_callbacks()
 
 # Workflow 默认超时较短，复杂 DSL 续跑时容易误判超时。
 os.environ.setdefault("WORKFLOW_EXECUTE_TIMEOUT", "300")
