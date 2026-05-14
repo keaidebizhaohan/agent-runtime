@@ -31,6 +31,9 @@ dependencies = [
 gaussdb = [
     "async-gaussdb>=0.30.4",
 ]
+amqp = [
+    "aio-pika>=9.4",
+]
 
 [tool.uv]
 default-groups = ['dev']
