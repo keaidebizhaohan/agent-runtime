@@ -332,7 +332,7 @@ async def _run_one(
         concurrency=spec.conc,
         ttl=spec.ttl,
         request_id=rid,
-        raw=json.dumps(msg, ensure_ascii=False),
+        raw=msg,
     )
     ts0 = time.monotonic() - t0
     logger.info(f"[{_ts_now()} +{ts0:6.2f}s] >>> SEND  sid={spec.sid} req#{seq} rid={rid}")
