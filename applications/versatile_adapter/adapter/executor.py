@@ -77,7 +77,7 @@ class VersatileAdapterExecutor(AgentExecutor):  # noqa: F821
             updater = TaskUpdater(event_queue, task_id, conv_id)
     
 
-            logger.info(f"[VersatileAdapter] 接收请求：conv_id={conv_id}, task_id={task_id}, agent_id={agent_id}"))
+            logger.info(f"[VersatileAdapter] 接收请求：conv_id={conv_id}, task_id={task_id}, agent_id={agent_id}")
             logger.debug(f"[VersatileAdapter] 请求头：{headers}")
             logger.debug(f"[VersatileAdapter] 请求体：{versatile_input}")
             logger.debug(f"[VersatileAdapter] 请求参数：{params}")
