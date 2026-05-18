@@ -283,10 +283,6 @@ class WSServiceMessageChannel:
                 payload = bytes(payload)
             if not isinstance(payload, (str, bytes)):
                 payload = self._payload_from_raw(payload)
-            else:
-                raise TypeError(
-                    f"raw_msg must be str or bytes for WebSocket send, got {type(payload).__name__}"
-                )
             await w.send(payload)
         except Exception as e:
             self._request_done.pop(rid, None)
