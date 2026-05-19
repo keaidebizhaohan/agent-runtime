@@ -4,8 +4,15 @@
 from typing import Optional
 from urllib.parse import quote_plus
 
+from sqlalchemy import text
+from sqlalchemy.engine import make_url
+from sqlalchemy.ext.asyncio import create_async_engine
+
 from .sqlalchemy_handler import SQLAlchemyHandler
 from ..config import settings
+from ..log import get_logger
+
+logger = get_logger(__name__)
 
 
 class MySQLHandler(SQLAlchemyHandler):
@@ -33,3 +40,26 @@ class MySQLHandler(SQLAlchemyHandler):
             f"@{self.host}:{self.port}/{self.database}"
         )
         super().__init__(database_url)
+
+    async def init_database(self) -> None:
+        """初始化 MySQL 库（存在则跳过，不存在则创建）。"""
+        database_name = (self.database or "").strip()
+        if not database_name:
+            logger.warning("No database name configured, skipping init_database")
+            return
+
+        quoted_name = "`" + database_name.replace("`", "``") + "`"
+        url = make_url(self.database_url)
+        server_url = url.set(database="")
+        temp_engine = create_async_engine(
+            server_url.render_as_string(hide_password=False),
+            echo=False,
+        )
+        try:
+            async with temp_engine.begin() as conn:
+                await conn.execute(
+                    text(f"CREATE DATABASE IF NOT EXISTS {quoted_name}")
+                )
+            logger.info("MySQL database ensured: database=%s", database_name)
+        finally:
+            await temp_engine.dispose()
