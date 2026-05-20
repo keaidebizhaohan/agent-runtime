@@ -17,7 +17,7 @@ from .interfaces import (
     IServiceManager,
     SessionRequestWrapper, ISessionRequest,
 )
-from .models import AccessConfig, SessionConfig
+from .models import AccessConfig, SessionConfig, PurgeResult
 
 logger = get_logger(__name__)
 
@@ -114,6 +114,23 @@ class Access(IAccess):
         self._shutdown_done = True
         await self._service_manager.stop()
         logger.info("Access 已 shutdown")
+
+    async def purge_all_pods(self, *, restore_min_idle: bool = False) -> PurgeResult:
+        """供 gateway 主备切换调用：清空当前进程持有的 service/pod 池，但不停 ServiceManager。
+
+        主备切换判断不放在本包内——调用方需先确认本节点已失去主身份。
+        """
+        if self._shutdown_done:
+            logger.warning("Access purge_all_pods 被忽略: 已 shutdown")
+            return PurgeResult()
+        result = await self._service_manager.purge_all_services(
+            restore_min_idle=restore_min_idle,
+        )
+        logger.info(
+            "Access purge_all_pods 完成: deleted=%s failed=%s restore_min_idle=%s",
+            result.deleted_count, len(result.failed), restore_min_idle,
+        )
+        return result
 
     async def update_config(
             self, config: AccessConfig, session_config: Optional[SessionConfig] = None,

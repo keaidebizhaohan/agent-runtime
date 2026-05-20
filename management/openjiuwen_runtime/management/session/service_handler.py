@@ -263,11 +263,13 @@ class ServiceHandler(IServiceHandler):
         if hasattr(self._channel, "close"):
             with contextlib.suppress(Exception):
                 await self._channel.close()  # type: ignore[union-attr, misc]
+        delete_error: Exception | None = None
         try:
             if self._deploy.resource_id:
                 await self._deploy.delete()
         except Exception as e:  # noqa: BLE001
             logger.error("deploy 后端 delete 失败: service_id=%s err=%s", self._id, e, exc_info=True)
+            delete_error = e
         self._closed = True
         self._sessions.clear()
         self._by_request.clear()
@@ -275,6 +277,8 @@ class ServiceHandler(IServiceHandler):
         self._session_reserved.clear()
         await self._session_router.clear()
         logger.info("ServiceHandler 已销毁: service_id=%s", self._id)
+        if delete_error is not None:
+            raise delete_error
 
     async def close(self) -> None:
         await self.delete()

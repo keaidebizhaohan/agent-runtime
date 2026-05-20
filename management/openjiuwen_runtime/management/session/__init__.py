@@ -17,7 +17,7 @@ from .interfaces import (
     ISessionStrategy,
     SessionRequestWrapper,
 )
-from .models import AccessConfig, MessagePriority, MessageType, SessionConfig
+from .models import AccessConfig, MessagePriority, MessageType, SessionConfig, PurgeResult
 from .runtime import IDeployController, NoOpDeployController
 from .service_handler import ServiceHandler
 from .service_manager import ServiceManager
@@ -36,20 +36,21 @@ __all__ = (
     "IServiceInstanceFactory",
     "IServiceManager",
     "IServiceMessageChannel",
-    "OnRequestCompleteCallback",
     "ISessionHandler",
     "ISessionRequest",
     "ISessionStrategy",
     "MessagePriority",
     "MessageType",
     "NoOpDeployController",
+    "OnRequestCompleteCallback",
     "PriorityDualAsyncQueues",
+    "PurgeResult",
     "ServiceHandler",
     "ServiceManager",
     "SessionConfig",
     "SessionRequest",
     "SessionRequestWrapper",
+    "serialize_request_payload",
     "Timer",
     "WSServiceMessageChannel",
-    "serialize_request_payload",
 )
