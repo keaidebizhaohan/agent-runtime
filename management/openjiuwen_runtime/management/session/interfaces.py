@@ -7,6 +7,7 @@ from typing import (
     Any,
     Awaitable,
     Callable,
+    Dict,
     Optional,
     TYPE_CHECKING,
     AsyncIterator,
@@ -98,6 +99,11 @@ class ISessionRequest(PriorityMessage):
     @property
     @abstractmethod
     def raw_msg(self) -> Any:
+        pass
+
+    @property
+    @abstractmethod
+    def service_template(self) -> Optional[Dict[str, Any]]:
         pass
 
 
@@ -193,10 +199,16 @@ class IAccess(ABC):
 
     @abstractmethod
     async def update_config(
-            self, config: "AccessConfig", session_config: Optional["SessionConfig"] = None,
+            self, config: Optional["AccessConfig"] = None, session_config: Optional["SessionConfig"] = None,
             strategy: Optional["ISessionStrategy"] = None,
     ) -> None:
-        """运行时热更新配置。存量 session/service 不变，新建的使用新值。"""
+        """运行时热更新配置。存量 session/service 不变，新建的使用新值。
+        
+        Args:
+            config: 新的 AccessConfig 配置。如果为 None 或默认空配置，则不更新 config。
+            session_config: 可选的会话配置。
+            strategy: 可选的会话策略。
+        """
         pass
 
     @abstractmethod
@@ -241,7 +253,9 @@ class IServiceMessageChannel(Protocol):
 
 class IServiceInstanceFactory(ABC):
     @abstractmethod
-    async def new_service(self, response_parser: IResponseParser) -> "IServiceHandler":
+    async def new_service(
+        self, response_parser: IResponseParser, service_template: Optional[Dict[str, Any]] = None
+    ) -> "IServiceHandler":
         pass
 
 
@@ -284,6 +298,22 @@ class IServiceManager(ABC):
 
         Returns:
             ``PurgeResult(deleted_count, failed)``。
+        """
+
+    @abstractmethod
+    def mark_deprecated(self) -> None:
+        """标记当前 ServiceManager 为待老化状态。调用 update_config 时自动调用。"""
+
+    @abstractmethod
+    def is_deprecated(self) -> bool:
+        """检查当前 ServiceManager 是否处于待老化状态。"""
+
+    @abstractmethod
+    async def try_cleanup_if_idle(self) -> bool:
+        """尝试清理当前 ServiceManager（如果无在途任务和活跃 session）。
+        
+        Returns:
+            True 表示已清理成功，False 表示仍有活跃任务无法清理。
         """
 
 
@@ -339,6 +369,12 @@ class IServiceHandler(ABC):
 
     @abstractmethod
     async def deploy(self) -> None:
+        pass
+
+    @property
+    @abstractmethod
+    def service_ttl(self) -> Optional[int]:
+        """服务实例的 idle TTL（秒）。从 service_template 提取，可能为 None（表示使用 Manager 的默认值）。"""
         pass
 
     @abstractmethod

@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, List, Optional, Tuple, cast
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple, cast
 from unittest.mock import AsyncMock
 
 import pytest
@@ -120,7 +120,9 @@ def make_factory(
     k8s_list: list[RecordingK8s] = []
 
     class _F(IServiceInstanceFactory):
-        async def new_service(self, response_parser: IResponseParser) -> IServiceHandler:
+        async def new_service(
+            self, response_parser: IResponseParser, service_template: Optional[Dict[str, Any]] = None
+        ) -> IServiceHandler:
             if k8s_per_service:
                 k8s = RecordingK8s()
                 k8s_list.append(k8s)
@@ -132,6 +134,7 @@ def make_factory(
                 message_channel=channel,
                 response_parser=response_parser,
                 deploy_controller=deploy,
+                service_template=service_template,
             )
 
     return _F(), k8s_list
@@ -149,17 +152,20 @@ async def _build_access(
     ch = channel or MockMessageChannel()
     factory, k8s_list = make_factory(ch, service_concurrency, k8s_per_service)
     dq: PriorityDualAsyncQueues[QueueItem] = PriorityDualAsyncQueues(100, 1000)
-    sm = ServiceManager(
-        service_factory=factory,
-        dual_queue=dq,
-        timer=Timer(),
-        service_concurrency=service_concurrency,
-        min_idle_services=min_idle,
-        max_services=max_services,
-        autoscale_interval=0.2,
-        service_idle_ttl=0,
-    )
-    acc = Access(sm)
+    
+    def create_sm() -> ServiceManager:
+        return ServiceManager(
+            service_factory=factory,
+            dual_queue=dq,
+            timer=Timer(),
+            service_concurrency=service_concurrency,
+            min_idle_services=min_idle,
+            max_services=max_services,
+            autoscale_interval=0.2,
+            service_idle_ttl=0,
+        )
+    
+    acc = Access(create_sm)
     cfg = AccessConfig(
         user_queue_size=1000,
         system_queue_size=100,
@@ -173,7 +179,7 @@ async def _build_access(
         session_config=SessionConfig(concurrency=per_session, ttl=0),
         strategy=PerChatBotStrategy(),
     )
-    return acc, ch, sm, k8s_list
+    return acc, ch, create_sm(), k8s_list
 
 
 @pytest.mark.asyncio
@@ -278,6 +284,7 @@ async def test_k8s_delete_called_on_service_handler() -> None:
         message_channel=channel,
         response_parser=p,
         deploy_controller=k8s,
+        service_template=None,
     )
     await h.deploy()
     assert k8s.deploy_count == 1
@@ -294,13 +301,14 @@ async def test_k8s_deploy_mock_async() -> None:
 
     class MFactory(IServiceInstanceFactory):
         async def new_service(
-                self, response_parser: IResponseParser
+                self, response_parser: IResponseParser, service_template: Optional[Dict[str, Any]] = None
         ) -> IServiceHandler:
             return ServiceHandler(
                 total_concurrency=3,
                 message_channel=MockMessageChannel(),
                 response_parser=response_parser,
                 deploy_controller=m,
+                service_template=service_template,
             )
 
     dq: PriorityDualAsyncQueues[QueueItem] = PriorityDualAsyncQueues(5, 5)

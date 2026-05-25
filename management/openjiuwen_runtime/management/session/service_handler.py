@@ -43,12 +43,15 @@ class ServiceHandler(IServiceHandler):
             response_parser: IResponseParser,
             deploy_controller: Optional[IDeployController] = None,
             generation: int = 0,
+            service_template: Optional[Dict[str, Any]] = None,
     ) -> None:
         if total_concurrency <= 0:
             raise ValueError("total_concurrency must be positive")
         self._id = service_id or str(uuid.uuid4())
         self._total = total_concurrency
         self._generation = generation
+        # 从 service_template 中提取 service_ttl（可能为 None，表示使用默认值）
+        self._service_ttl: Optional[int] = self._extract_service_ttl_from_template(service_template)
         # session_id -> 已预留的服务级额度（等于该 session 声明的 session_concurrency）
         self._session_reserved: Dict[str, int] = {}
         self._session_create_lock = asyncio.Lock()
@@ -67,11 +70,35 @@ class ServiceHandler(IServiceHandler):
         # WebSocket 等通道在绑定后可拿到本实例与 IResponseParser，供接收循环多路分片
         if hasattr(self._channel, "bind_handler"):
             self._channel.bind_handler(self, self._parser)  # type: ignore[union-attr]
-        logger.debug("ServiceHandler 构造: service_id=%s total_concurrency=%s", self._id, self._total)
+        logger.debug(
+            "ServiceHandler 构造: service_id=%s total_concurrency=%s service_ttl=%s",
+            self._id, self._total, self._service_ttl,
+        )
+
+    @staticmethod
+    def _extract_service_ttl_from_template(
+            service_template: Optional[Dict[str, Any]]
+    ) -> Optional[int]:
+        """从 service_template 中提取 service_ttl。如果不存在或无效，返回 None（表示使用默认值）。"""
+        if service_template is None:
+            return None
+        ttl = service_template.get("service_ttl")
+        if ttl is None:
+            return None
+        try:
+            ttl_int = int(ttl)
+            return ttl_int if ttl_int >= 0 else None
+        except (TypeError, ValueError):
+            return None
 
     @property
     def id(self) -> str:
         return self._id
+
+    @property
+    def service_ttl(self) -> Optional[int]:
+        """获取服务实例的 TTL（从 template 提取）。可能为 None，表示应由调用方使用默认值。"""
+        return self._service_ttl
 
     @property
     def total_concurrency(self) -> int:

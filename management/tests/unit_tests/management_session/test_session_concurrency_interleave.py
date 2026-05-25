@@ -98,6 +98,7 @@ async def test_session_cap_interleaves_other_sessions() -> None:
         message_channel=ch,
         response_parser=p,
         deploy_controller=NoOpDeployController(),
+        service_template=None,
     )
     loop = asyncio.get_running_loop()
     cap = 10

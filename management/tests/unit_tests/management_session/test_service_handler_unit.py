@@ -72,6 +72,7 @@ async def test_one_inflight_decrements() -> None:
         message_channel=ch,
         response_parser=p,
         deploy_controller=NoOpDeployController(),
+        service_template=None,
     )
     w = SessionRequestWrapper(
         _sreq(), asyncio.Queue(), asyncio.get_running_loop().create_future()
@@ -93,5 +94,6 @@ async def test_dispatch_inbound_unknown() -> None:
         message_channel=ch,
         response_parser=p,
         deploy_controller=NoOpDeployController(),
+        service_template=None,
     )
     assert not await h.dispatch_inbound_chunk({"request_id": "nope"}, p)

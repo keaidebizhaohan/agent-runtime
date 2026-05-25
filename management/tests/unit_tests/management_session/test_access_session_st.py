@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, List, Optional, cast
+from typing import Any, Awaitable, Callable, Dict, List, Optional, cast
 
 import pytest
 
@@ -103,7 +103,9 @@ class _Factory(IServiceInstanceFactory):
         self._sc = sc
         self._d = dlist
 
-    async def new_service(self, response_parser: IResponseParser) -> IServiceHandler:
+    async def new_service(
+        self, response_parser: IResponseParser, service_template: Optional[Dict[str, Any]] = None
+    ) -> IServiceHandler:
         d = self._d.pop(0) if self._d else None
         dc: Any = d if d is not None else NoOpDeployController()
         return ServiceHandler(
@@ -111,6 +113,7 @@ class _Factory(IServiceInstanceFactory):
             message_channel=self._ch,
             response_parser=response_parser,
             deploy_controller=dc,
+            service_template=service_template,
         )
 
 
@@ -168,17 +171,20 @@ async def _stack(
         dlist = [None] * 20
     f = _Factory(ch, scap, dlist)
     dq: PriorityDualAsyncQueues[QueueItem] = PriorityDualAsyncQueues(100, 1000)
-    sm = ServiceManager(
-        f,
-        dq,
-        Timer(),
-        service_concurrency=scap,
-        min_idle_services=min_idle,
-        max_services=max_svc,
-        autoscale_interval=0.1,
-        service_idle_ttl=300,
-    )
-    acc = Access(sm)
+    
+    def create_sm() -> ServiceManager:
+        return ServiceManager(
+            f,
+            dq,
+            Timer(),
+            service_concurrency=scap,
+            min_idle_services=min_idle,
+            max_services=max_svc,
+            autoscale_interval=0.1,
+            service_idle_ttl=300,
+        )
+    
+    acc = Access(create_sm)
     cfg = AccessConfig(
         user_queue_size=1000,
         system_queue_size=100,
@@ -192,7 +198,7 @@ async def _stack(
         session_config=SessionConfig(concurrency=2, ttl=0),
         strategy=PerChatBotStrategy(),
     )
-    return acc, ch, sm, drec, f
+    return acc, ch, create_sm(), drec, f
 
 
 async def _stack_holding(
@@ -203,17 +209,20 @@ async def _stack_holding(
     dlist: list[Optional[object]] = [None] * 20
     f = _Factory(ch, scap, dlist)
     dq: PriorityDualAsyncQueues[QueueItem] = PriorityDualAsyncQueues(100, 1000)
-    sm = ServiceManager(
-        f,
-        dq,
-        Timer(),
-        service_concurrency=scap,
-        min_idle_services=0,
-        max_services=5,
-        autoscale_interval=0.1,
-        service_idle_ttl=300,
-    )
-    acc = Access(sm)
+    
+    def create_sm() -> ServiceManager:
+        return ServiceManager(
+            f,
+            dq,
+            Timer(),
+            service_concurrency=scap,
+            min_idle_services=0,
+            max_services=5,
+            autoscale_interval=0.1,
+            service_idle_ttl=300,
+        )
+    
+    acc = Access(create_sm)
     cfg = AccessConfig(
         user_queue_size=1000,
         system_queue_size=100,
@@ -227,7 +236,7 @@ async def _stack_holding(
         session_config=SessionConfig(concurrency=sess_cap, ttl=0),
         strategy=PerChatBotStrategy(),
     )
-    return acc, ch, sm
+    return acc, ch, create_sm()
 
 
 @pytest.mark.asyncio

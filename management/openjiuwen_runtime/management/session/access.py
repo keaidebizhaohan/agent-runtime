@@ -5,7 +5,7 @@
 
 import asyncio
 import uuid
-from typing import Any, AsyncIterator, Optional
+from typing import Any, AsyncIterator, Callable, List, Optional
 
 from openjiuwen_runtime.foundation.log import get_logger
 
@@ -20,6 +20,10 @@ from .interfaces import (
 from .models import AccessConfig, SessionConfig, PurgeResult
 
 logger = get_logger(__name__)
+
+
+# 用于创建 ServiceManager 的工厂函数类型
+ServiceManagerFactory = Callable[[], IServiceManager]
 
 
 class _AutoIdRequest(IRequest):
@@ -64,8 +68,12 @@ class _AutoIdRequest(IRequest):
 
 
 class Access(IAccess):
-    def __init__(self, service_manager: IServiceManager) -> None:
-        self._service_manager = service_manager
+    def __init__(
+        self,
+        service_manager_factory: ServiceManagerFactory,
+    ) -> None:
+        self._service_manager_factory = service_manager_factory
+        self._service_manager: Optional[IServiceManager] = None
         self._strategy: Optional[ISessionStrategy] = None
         self._response_parser: Optional[IResponseParser] = None
         self._config: Optional[AccessConfig] = None
@@ -84,6 +92,8 @@ class Access(IAccess):
         if strategy:
             self._strategy = strategy
             self._strategy.configure(concurrency=session_config.concurrency, ttl=session_config.ttl)
+        # 通过工厂函数创建 ServiceManager
+        self._service_manager = self._service_manager_factory()
         await self._service_manager.init(response_parser)
         await self._service_manager.start()
         logger.info(
@@ -112,7 +122,9 @@ class Access(IAccess):
             logger.debug("Access shutdown 被忽略(幂等): 已关闭")
             return
         self._shutdown_done = True
-        await self._service_manager.stop()
+        # 停止当前 ServiceManager
+        if self._service_manager:
+            await self._service_manager.stop()
         logger.info("Access 已 shutdown")
 
     async def purge_all_pods(self, *, restore_min_idle: bool = False) -> PurgeResult:
@@ -133,17 +145,27 @@ class Access(IAccess):
         return result
 
     async def update_config(
-            self, config: AccessConfig, session_config: Optional[SessionConfig] = None,
+            self, config: Optional[AccessConfig] = None, session_config: Optional[SessionConfig] = None,
             strategy: Optional[ISessionStrategy] = None,
     ) -> None:
-        """运行时热更新配置。存量 session/service 不变，新建的使用新值。"""
-        self._config = config
-        await self._service_manager.update_config(
-            min_idle_services=config.min_idle_services,
-            max_services=config.max_services,
-            service_idle_ttl=config.service_ttl,
-            autoscale_interval=config.autoscale_interval,
-        )
+        """运行时热更新配置。标记当前 ServiceManager 为待老化，创建新的 ServiceManager。"""
+        logger.info("Access 开始热更新配置，将标记当前 ServiceManager 为待老化并创建新实例")
+        # 标记当前 ServiceManager 为待老化状态
+        if self._service_manager:
+            self._service_manager.mark_deprecated()
+            logger.info("当前 ServiceManager 已标记为待老化")
+
+        # 创建新的 ServiceManager
+        new_sm = self._service_manager_factory()
+        # 初始化并启动新 ServiceManager
+        await new_sm.init(self._response_parser)
+        await new_sm.start()
+        # 切换到新的 ServiceManager
+        self._service_manager = new_sm
+
+        # 更新配置
+        if config:
+            self._config = config
         if strategy:
             self._strategy = strategy
         if session_config and self._strategy:
@@ -158,6 +180,13 @@ class Access(IAccess):
         if not self._response_parser:
             logger.error("ResponseParser 未设置")
             return
+        if not self._service_manager:
+            logger.error("ServiceManager 未初始化")
+            return
+
+        # 记录当前使用的 ServiceManager（可能在 update_config 后被标记为老化）
+        current_sm = self._service_manager
+
         if isinstance(msg, ISessionRequest):
             session_request = msg
             rid = session_request.request_id
@@ -201,6 +230,7 @@ class Access(IAccess):
         # 4) 入用户队列，由 ServiceManager 异步消费并路由到具体服务实例
         await self._service_manager.handle_message(wrapper)
         logger.debug("Access 已将请求投递 ServiceManager, request_id=%s", rid)
+
         try:
             while True:
                 try:
@@ -224,3 +254,9 @@ class Access(IAccess):
             if not cancel.done():
                 cancel.set_result(None)
             logger.debug("Access send_message 协程结束, request_id=%s", rid)
+
+            # 请求处理完成后，检查当前 ServiceManager 是否被标记为老化且可以清理
+            if current_sm.is_deprecated():
+                cleaned = await current_sm.try_cleanup_if_idle()
+                if cleaned:
+                    logger.info("老化的 ServiceManager 已成功清理")

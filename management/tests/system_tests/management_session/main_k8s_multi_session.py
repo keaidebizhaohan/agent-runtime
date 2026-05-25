@@ -42,7 +42,7 @@ import sys
 import time
 import uuid
 from dataclasses import dataclass
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 from openjiuwen_runtime.management.session.access import Access
 from openjiuwen_runtime.management.session.dual_queue import PriorityDualAsyncQueues
@@ -414,7 +414,7 @@ async def _amain() -> int:
 
     class _Factory(IServiceInstanceFactory):
         async def new_service(
-            self, response_parser: IResponseParser
+            self, response_parser: IResponseParser, service_template: Optional[Dict[str, Any]] = None
         ) -> IServiceHandler:
             k8s = K8sServiceHandler(
                 args.image,
@@ -441,23 +441,27 @@ async def _amain() -> int:
                 message_channel=ch,
                 response_parser=response_parser,
                 deploy_controller=K8sDeployController(k8s),
+                service_template=service_template,
             )
 
     factory = _Factory()
     dual_q: PriorityDualAsyncQueues[QueueItem] = PriorityDualAsyncQueues(
         acc_cfg.user_queue_size, acc_cfg.system_queue_size
     )
-    sm = ServiceManager(
-        service_factory=factory,
-        dual_queue=dual_q,
-        timer=Timer(),
-        service_concurrency=acc_cfg.service_concurrency,
-        min_idle_services=acc_cfg.min_idle_services,
-        max_services=acc_cfg.max_services,
-        autoscale_interval=acc_cfg.autoscale_interval,
-        service_idle_ttl=acc_cfg.service_ttl,
-    )
-    access = Access(sm)
+
+    def create_sm() -> ServiceManager:
+        return ServiceManager(
+            service_factory=factory,
+            dual_queue=dual_q,
+            timer=Timer(),
+            service_concurrency=acc_cfg.service_concurrency,
+            min_idle_services=acc_cfg.min_idle_services,
+            max_services=acc_cfg.max_services,
+            autoscale_interval=acc_cfg.autoscale_interval,
+            service_idle_ttl=acc_cfg.service_ttl,
+        )
+    
+    access = Access(create_sm)
     try:
         await access.init(
             response_parser=E2aEnvelopResponseParser(),

@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Optional, Union
+from typing import Any, Dict, Optional, Union
 
 from openjiuwen_runtime.foundation.log import get_logger
 
@@ -73,6 +73,8 @@ class ServiceManager(IServiceManager):
         # purge_all_services 期间为 True：让 _ensure_min_idle / _bootstrap_min_idle 直接返回，
         # 避免 autoscale 在清 pod 同时又把 min_idle 拉起来。
         self._purging: bool = False
+        # 老化标记：当调用 update_config 时设置为 True，表示此 ServiceManager 待老化
+        self._deprecated: bool = False
 
     async def init(self, response_parser: IResponseParser) -> None:
         self._response_parser = response_parser
@@ -92,9 +94,6 @@ class ServiceManager(IServiceManager):
         self._running = True
         # 消息循环：从双队列取件；用户请求会 spawn 成独立 task，不阻塞下一条入队
         self._message_task = asyncio.create_task(self._message_loop())
-        # 补实例：按周期检查是否低于 min_idle
-        self._autoscale_task = asyncio.create_task(self._autoscale_loop())
-        await self._bootstrap_min_idle()
         logger.info(
             "ServiceManager 已启动, 预拉热完成, 当前实例数=%s", self._total_services()
         )
@@ -358,11 +357,13 @@ class ServiceManager(IServiceManager):
                 logger.info("autoscale: 新实例入 idle, service_id=%s gen=%s", h.id, h.generation)
         # 新入 idle 的实例不启动 service_ttl 删 Pod；仅 min_idle 维持数量
 
-    async def _new_deployed(self) -> Optional[IServiceHandler]:
+    async def _new_deployed(
+        self, service_template: Optional[Dict[str, Any]] = None
+    ) -> Optional[IServiceHandler]:
         if self._response_parser is None:
             return None
         try:
-            h = await self._factory.new_service(self._response_parser)
+            h = await self._factory.new_service(self._response_parser, service_template)
         except Exception as e:  # noqa: BLE001
             logger.error("创建服务实例失败 (factory): %s", e, exc_info=True)
             return None
@@ -541,8 +542,6 @@ class ServiceManager(IServiceManager):
 
     async def _arm_in_use_to_idle_pool(self, service_id: str) -> None:
         """in_use 实例的所有 session 均已归还且无 in-flight: 等待 service_ttl 后转入 _idle。"""
-        if self._service_idle_ttl < 0:
-            return
         async with self._lock:
             h = self._in_use.get(service_id)
             if h is None:
@@ -550,7 +549,11 @@ class ServiceManager(IServiceManager):
             if h.inflight_requests > 0 or h.active_session_count > 0:
                 # 仍有业务/会话占用, 不 arm
                 return
-        if self._service_idle_ttl == 0:
+            # 获取 service_ttl，如果为 None 则使用 Manager 的默认值
+            service_ttl = h.service_ttl if h.service_ttl is not None else self._service_idle_ttl
+        if service_ttl < 0:
+            return
+        if service_ttl == 0:
             await self._move_in_use_to_idle_pool(service_id)
             return
         if service_id in self._to_idle_timer_armed:
@@ -563,11 +566,11 @@ class ServiceManager(IServiceManager):
             self._to_idle_timer_armed.discard(service_id)
             await self._move_in_use_to_idle_pool(service_id)
 
-        await self._timer.start_timer(key, self._service_idle_ttl, _go)
+        await self._timer.start_timer(key, service_ttl, _go)
         logger.info(
             "已 arm 无业务后转入 idle 池: service_id=%s 等待 %s 秒 (若入池后超 min，回收可与该等待合并，不再双计)",
             service_id,
-            self._service_idle_ttl,
+            service_ttl,
         )
 
     async def _move_in_use_to_idle_pool(self, service_id: str) -> None:
@@ -602,27 +605,28 @@ class ServiceManager(IServiceManager):
         """当 len(idle) > min_idle 时，回收一台多余 idle：默认再等待 service_ttl；入 idle 后若
         `after_in_use_to_idle` 为 True 则**不再**叠二次 ttl（与 in_use 阶段无业务等待合并）。
         """
-        if self._service_idle_ttl < 0:
-            return
         candidate: Optional[str] = None
+        candidate_h: Optional[IServiceHandler] = None
         async with self._lock:
             if len(self._idle) <= self._min_idle:
                 return
             for sid in reversed(list(self._idle.keys())):
                 if sid not in self._excess_idle_timer_armed:
                     candidate = sid
+                    candidate_h = self._idle.get(sid)
                     break
-        if candidate is None:
+        if candidate is None or candidate_h is None:
             return
-        candidate_h = self._idle.get(candidate)
+        # 获取该实例的 service_ttl，如果为 None 则使用 Manager 的默认值
+        service_ttl = candidate_h.service_ttl if candidate_h.service_ttl is not None else self._service_idle_ttl
         # 旧代际 idle：立即回收，不等 service_ttl
-        if candidate_h is not None and candidate_h.generation != self._generation:
+        if candidate_h.generation != self._generation:
             self._excess_idle_timer_armed.add(candidate)
             await self.enqueue_system(ServiceReclaimEvent(service_id=candidate))
             logger.debug("旧代际 idle 立即回收入队: service_id=%s gen=%s", candidate, candidate_h.generation)
             return
         # in_use 已按同字段等过一次；或显式 service_ttl=0
-        if self._service_idle_ttl == 0 or after_in_use_to_idle:
+        if service_ttl == 0 or after_in_use_to_idle:
             self._excess_idle_timer_armed.add(candidate)
             await self.enqueue_system(ServiceReclaimEvent(service_id=candidate))
             logger.debug(
@@ -630,6 +634,8 @@ class ServiceManager(IServiceManager):
                 candidate,
                 after_in_use_to_idle,
             )
+            return
+        if service_ttl < 0:
             return
         self._excess_idle_timer_armed.add(candidate)
         key = f"excess_idle:svc:{candidate}"
@@ -642,11 +648,11 @@ class ServiceManager(IServiceManager):
                     return
             await self.enqueue_system(ServiceReclaimEvent(service_id=candidate))
 
-        await self._timer.start_timer(key, self._service_idle_ttl, _go)
+        await self._timer.start_timer(key, service_ttl, _go)
         logger.info(
             "已 arm 多余 idle 回收: service_id=%s ttl=%s (idle>min=%s)",
             candidate,
-            self._service_idle_ttl,
+            service_ttl,
             self._min_idle,
         )
 
@@ -726,7 +732,7 @@ class ServiceManager(IServiceManager):
                 self._total_services(),
             )
             return None
-        h2 = await self._new_deployed()
+        h2 = await self._new_deployed(sreq.service_template)
         if h2 is None:
             return None
         self._in_use[h2.id] = h2
@@ -755,3 +761,49 @@ class ServiceManager(IServiceManager):
         )
         if w.cancel and not w.cancel.done():
             w.cancel.set_result(None)
+
+    def mark_deprecated(self) -> None:
+        """标记当前 ServiceManager 为待老化状态。"""
+        self._deprecated = True
+        logger.info("ServiceManager 已标记为待老化状态: generation=%s", self._generation)
+
+    def is_deprecated(self) -> bool:
+        """检查当前 ServiceManager 是否处于待老化状态。"""
+        return self._deprecated
+
+    async def try_cleanup_if_idle(self) -> bool:
+        """尝试清理当前 ServiceManager（如果无在途任务和活跃 session）。
+        
+        Returns:
+            True 表示已清理成功，False 表示仍有活跃任务无法清理。
+        """
+        if not self._deprecated:
+            logger.debug("ServiceManager 未标记为待老化，跳过清理检查")
+            return False
+        
+        # 检查是否有在途的用户路由任务
+        active_tasks = [t for t in self._user_route_tasks if not t.done()]
+        inflight_count = len(active_tasks)
+        
+        # 检查 in_use 和 idle 中的 session 数
+        in_use_sessions = sum(h.active_session_count for h in self._in_use.values())
+        idle_sessions = sum(h.active_session_count for h in self._idle.values())
+        
+        # 如果没有在途任务且没有活跃 session，则可以清理
+        if inflight_count == 0 and in_use_sessions == 0 and idle_sessions == 0:
+            logger.info(
+                "老化 ServiceManager 任务已全部完成，准备清理: in_use=%s idle=%s",
+                len(self._in_use), len(self._idle),
+            )
+            try:
+                await self.stop()
+                return True
+            except Exception as e:  # noqa: BLE001
+                logger.error("老化 ServiceManager 停止失败: %s", e, exc_info=True)
+                return False
+        else:
+            logger.debug(
+                "老化 ServiceManager 仍有活跃任务，暂不清理: inflight=%s in_use_sessions=%s idle_sessions=%s",
+                inflight_count, in_use_sessions, idle_sessions,
+            )
+            return False
