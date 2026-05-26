@@ -17,7 +17,7 @@ from .interfaces import (
     ISessionStrategy,
     SessionRequestWrapper,
 )
-from .models import AccessConfig, MessagePriority, MessageType, SessionConfig, PurgeResult
+from .models import AccessConfig, MessagePriority, MessageType, SessionConfig
 from .runtime import IDeployController, NoOpDeployController
 from .service_handler import ServiceHandler
 from .service_manager import ServiceManager
@@ -44,7 +44,6 @@ __all__ = (
     "NoOpDeployController",
     "OnRequestCompleteCallback",
     "PriorityDualAsyncQueues",
-    "PurgeResult",
     "ServiceHandler",
     "ServiceManager",
     "SessionConfig",

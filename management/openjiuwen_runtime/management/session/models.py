@@ -68,14 +68,3 @@ class AccessConfig:
     message_timeout: int = 600
     max_retries: int = 3
     autoscale_interval: float = 0.2
-
-
-@dataclass
-class PurgeResult:
-    """
-    Access.purge_all_pods()` / `ServiceManager.purge_all_services()` 返回结构。
-    `failed` 元素至少含 `service_id` 与 `error` 两个键，便于调用方判断是否需要告警或重试。
-    """
-
-    deleted_count: int = 0
-    failed: list[dict[str, str]] = field(default_factory=list)

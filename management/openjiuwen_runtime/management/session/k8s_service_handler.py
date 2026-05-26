@@ -388,6 +388,58 @@ class K8sServiceHandler:
                 )
             await asyncio.sleep(self._delete_poll_interval)
 
+    @staticmethod
+    async def cleanup_all_agentserver_pods(
+            namespace: str,
+            kubeconfig: Optional[str] = None,
+            label_selector: str = "",
+            grace_period: int = 30,
+    ) -> int:
+        """按 label selector 批量删除所有匹配的 Pod（主备切换时清理旧 PRIMARY 遗留的 Pod）。
+
+        返回已提交删除的 Pod 数量。
+        """
+        try:
+            config.load_incluster_config()
+        except config.ConfigException:
+            if kubeconfig:
+                await config.load_kube_config(config_file=kubeconfig)
+            else:
+                await config.load_kube_config()
+        api_client = client.ApiClient()
+        deleted = 0
+        try:
+            core = client.CoreV1Api(api_client)
+            pods = await core.list_namespaced_pod(
+                namespace=namespace, label_selector=label_selector,
+            )
+            pod_names = [
+                p.metadata.name for p in (pods.items or [])
+                if p.metadata and p.metadata.name
+            ]
+            if not pod_names:
+                logger.info("无匹配 Pod 需清理: namespace=%s selector=%s", namespace, label_selector)
+                return 0
+            logger.info("开始批量清理 Pod: namespace=%s count=%s", namespace, len(pod_names))
+            for name in pod_names:
+                try:
+                    await core.delete_namespaced_pod(
+                        name=name,
+                        namespace=namespace,
+                        body=client.V1DeleteOptions(
+                            grace_period_seconds=grace_period,
+                            propagation_policy="Foreground",
+                        ),
+                    )
+                    deleted += 1
+                except ApiException as exc:
+                    if exc.status != 404:
+                        logger.error("删除 Pod 失败: name=%s err=%s", name, exc)
+            logger.info("批量清理完成: deleted=%s", deleted)
+        finally:
+            await api_client.close()
+        return deleted
+
 
 class K8sDeployController:
     """将 K8sServiceHandler 适配为 session.runtime.IDeployController。"""

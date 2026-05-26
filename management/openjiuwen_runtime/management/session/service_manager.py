@@ -22,7 +22,7 @@ from .interfaces import (
     RawMessage,
     SessionRequestWrapper,
 )
-from .models import MessageType, PurgeResult
+from .models import MessageType
 from .router import ServiceRouter
 
 logger = get_logger(__name__)
@@ -70,9 +70,6 @@ class ServiceManager(IServiceManager):
         # 形如 {session_id: service_id}; 接到新消息会自动清掉, _complete 钩子会触发 flush
         self._pending_expired_sessions: dict[str, str] = {}
         self._stop_completed: bool = False
-        # purge_all_services 期间为 True：让 _ensure_min_idle / _bootstrap_min_idle 直接返回，
-        # 避免 autoscale 在清 pod 同时又把 min_idle 拉起来。
-        self._purging: bool = False
         # 老化标记：当调用 update_config 时设置为 True，表示此 ServiceManager 待老化
         self._deprecated: bool = False
 
@@ -216,65 +213,6 @@ class ServiceManager(IServiceManager):
     def _total_services(self) -> int:
         return len(self._in_use) + len(self._idle)
 
-    async def purge_all_services(self, *, restore_min_idle: bool = False) -> PurgeResult:
-        """复用 ``ServiceHandler.delete()`` 清空当前实例池但不关闭后台循环，详见 ``IServiceManager``。"""
-        if self._stop_completed:
-            logger.info("purge 被忽略: ServiceManager 已 stop")
-            return PurgeResult()
-        original_min_idle = self._min_idle
-        self._purging = True
-        self._min_idle = 0
-        all_handlers: list[IServiceHandler] = []
-        to_idle_armed: list[str] = []
-        excess_idle_armed: list[str] = []
-        try:
-            async with self._lock:
-                all_handlers.extend(self._in_use.values())
-                all_handlers.extend(self._idle.values())
-                self._in_use.clear()
-                self._idle.clear()
-                self._pending_expired_sessions.clear()
-                to_idle_armed = list(self._to_idle_timer_armed)
-                excess_idle_armed = list(self._excess_idle_timer_armed)
-                self._to_idle_timer_armed.clear()
-                self._excess_idle_timer_armed.clear()
-            for sid in to_idle_armed:
-                try:
-                    await self._timer.cancel_timer(f"to_idle:svc:{sid}")
-                except Exception as e:  # noqa: BLE001
-                    logger.debug("purge cancel to_idle timer 失败: service_id=%s err=%s", sid, e)
-            for sid in excess_idle_armed:
-                try:
-                    await self._timer.cancel_timer(f"excess_idle:svc:{sid}")
-                except Exception as e:  # noqa: BLE001
-                    logger.debug("purge cancel excess_idle timer 失败: service_id=%s err=%s", sid, e)
-            try:
-                await self._service_router.clear()
-            except Exception as e:  # noqa: BLE001
-                logger.error("purge 清空 ServiceRouter 失败: %s", e, exc_info=True)
-
-            failed: list[dict[str, str]] = []
-            deleted = 0
-            for h in all_handlers:
-                try:
-                    await h.delete()
-                    deleted += 1
-                except Exception as e:  # noqa: BLE001
-                    logger.error(
-                        "purge 删除实例失败: service_id=%s err=%s", h.id, e, exc_info=True,
-                    )
-                    failed.append({"service_id": h.id, "error": str(e)})
-            logger.info(
-                "purge_all_services 完成: deleted=%s failed=%s restore_min_idle=%s "
-                "(original_min_idle=%s)",
-                deleted, len(failed), restore_min_idle, original_min_idle,
-            )
-            return PurgeResult(deleted_count=deleted, failed=failed)
-        finally:
-            if restore_min_idle:
-                self._min_idle = original_min_idle
-            self._purging = False
-
     def _discard_user_route_task(self, task: asyncio.Task[Any]) -> None:
         self._user_route_tasks.discard(task)
         if task.cancelled():
@@ -320,7 +258,7 @@ class ServiceManager(IServiceManager):
                 logger.error("autoscale 周期任务异常: %s", e, exc_info=True)
 
     async def _bootstrap_min_idle(self) -> None:
-        if self._min_idle <= 0 or self._purging:
+        if self._min_idle <= 0:
             return
         async with self._lock:
             cur_gen_idle = sum(1 for h in self._idle.values() if h.generation == self._generation)
@@ -335,7 +273,7 @@ class ServiceManager(IServiceManager):
         # 预拉热入 idle 的实例不启动「in_use→idle / 删 Pod」的 service_ttl 计时
 
     async def _ensure_min_idle(self) -> None:
-        if self._min_idle <= 0 or self._purging:
+        if self._min_idle <= 0:
             return
         _first_gap = True
         async with self._lock:

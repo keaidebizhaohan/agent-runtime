@@ -19,7 +19,7 @@ from typing import (
 from .models import MessagePriority, MessageType
 
 if TYPE_CHECKING:
-    from .models import AccessConfig, SessionConfig, PurgeResult
+    from .models import AccessConfig, SessionConfig
 
 # 与 ``ServiceHandler`` 传入的 ``async def on_request_complete(r)`` 一致（可 await）
 OnRequestCompleteCallback: TypeAlias = Callable[[Optional[str]], Awaitable[None]]
@@ -212,20 +212,11 @@ class IAccess(ABC):
         pass
 
     @abstractmethod
-    async def purge_all_pods(self, *, restore_min_idle: bool = False) -> "PurgeResult":
-        """清空当前 gateway 进程持有的全部 service/pod，不关闭后台消息循环。
+    async def cleanup_all_pods(self, namespace: str, *, kubeconfig: Optional[str] = None,
+                               label_selector: str = "") -> None:
+        """通过 K8s label selector 清理所有 AgentServer Pod。
 
-        典型场景：gateway 主备切换确认本节点失去主身份后，由 gateway 扩展层调用。
-        purge 期间临时禁用 ``min_idle`` 补偿，避免 autoscale 立刻重新拉起 pod。
-
-        Args:
-            restore_min_idle: purge 结束后是否恢复原 ``min_idle_services``。
-                主备切换默认 ``False``——被切走的主 gateway 不再拉新 pod；
-                普通运维清理可设为 ``True``。
-
-        Returns:
-            ``PurgeResult(deleted_count, failed)``；其中 ``failed`` 每项包含
-            ``service_id`` 与 ``error`` 字段。
+        典型场景：gateway 主备切换，新 PRIMARY 清理旧 PRIMARY 遗留的 Pod。
         """
         pass
 
@@ -284,25 +275,6 @@ class IServiceManager(ABC):
     async def update_config(self, **kwargs) -> None:
         """运行时更新调度参数并递增代际。"""
 
-    @abstractmethod
-    async def purge_all_services(self, *, restore_min_idle: bool = False) -> "PurgeResult":
-        """清空当前实例池但不关闭后台循环：复用 ``ServiceHandler.delete()`` 删除所有
-        ``_in_use`` / ``_idle`` 实例，并清空亲和路由与计时器集合；不调用 ``mark_closed()``，
-        不取消 ``_message_task`` / ``_autoscale_task``。
-
-        purge 期间临时将 ``_min_idle`` 置 0 并以 ``_purging`` 标记跳过 ``_ensure_min_idle()``，
-        避免 autoscale 立即补 pod。
-
-        Args:
-            restore_min_idle: purge 完成后是否恢复原 ``min_idle_services``。
-
-        Returns:
-            ``PurgeResult(deleted_count, failed)``。
-        """
-
-    @abstractmethod
-    def mark_deprecated(self) -> None:
-        """标记当前 ServiceManager 为待老化状态。调用 update_config 时自动调用。"""
 
     @abstractmethod
     def is_deprecated(self) -> bool:
