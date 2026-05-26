@@ -62,6 +62,10 @@ class K8sServiceHandler:
             nfs_server: Optional[str] = None,  # NFS 服务器地址
             nfs_path: Optional[str] = None,  # NFS 共享路径
             nfs_mount_path: Optional[str] = None,  # 容器内挂载路径
+            host_path: Optional[str] = None,  # 宿主机路径
+            host_mount_path: Optional[str] = None,  # hostPath 容器内挂载路径
+            mode: str = "product",  # 运行环境模式：支持 dev / product 两种值
+            node_name: Optional[str] = None,  # 强制调度到指定节点
             cpu_request: str = "500m",
             memory_request: str = "1Gi",
             cpu_limit: Optional[str] = None,
@@ -91,7 +95,10 @@ class K8sServiceHandler:
         self._nfs_server = nfs_server
         self._nfs_path = nfs_path
         self._nfs_mount_path = nfs_mount_path
-
+        self._host_path = host_path
+        self._host_mount_path = host_mount_path
+        self._mode = mode
+        self._node_name = node_name
         self._cpu_request = cpu_request
         self._memory_request = memory_request
         self._cpu_limit = cpu_limit if cpu_limit is not None else cpu_request
@@ -162,6 +169,23 @@ class K8sServiceHandler:
                     mount_path=self._nfs_mount_path,
                 )
             )
+        if self._mode == "dev":
+            if self._host_path and self._host_mount_path:
+                host_volume_name = "host-volume"
+                volumes.append(
+                    client.V1Volume(
+                        name=host_volume_name,
+                        host_path=client.V1HostPathVolumeSource(
+                            path=self._host_path,  # 宿主机路径
+                        ),
+                    )
+                )
+                volume_mounts.append(
+                    client.V1VolumeMount(
+                        name=host_volume_name,
+                        mount_path=self._host_mount_path,  # 容器内路径
+                    )
+                )
 
         container_resources = client.V1ResourceRequirements(
             requests={
@@ -199,6 +223,7 @@ class K8sServiceHandler:
                 containers=[container],
                 restart_policy=self._restart_policy,
                 volumes=volumes or None,
+                node_name=self._node_name if self._mode == "dev" else None,
             ),
         )
 

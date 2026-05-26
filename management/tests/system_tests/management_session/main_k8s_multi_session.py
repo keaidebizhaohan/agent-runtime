@@ -255,6 +255,10 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--readiness-period", type=int, default=10)
     p.add_argument("--ready-timeout", type=float, default=300.0)
     p.add_argument("--ready-poll", type=float, default=2.0)
+    p.add_argument("--host-path", default=None, help="宿主机路径，用于 hostPath 挂载")
+    p.add_argument("--host-mount-path", default=None, help="hostPath 在容器内的挂载路径")
+    p.add_argument("--node-name", default=None, help="强制调度到指定节点（仅 dev 模式生效）")
+    p.add_argument("--mode", default="product", choices=["dev", "product"], help="运行模式")
     # Access / ServiceManager
     p.add_argument("--user-queue", type=int, default=1000)
     p.add_argument("--system-queue", type=int, default=100)
@@ -430,6 +434,10 @@ async def _amain() -> int:
                 readiness_period=args.readiness_period,
                 ready_timeout=args.ready_timeout,
                 ready_poll_interval=args.ready_poll,
+                host_path=args.host_path,
+                host_mount_path=args.host_mount_path,
+                mode=args.mode,
+                node_name=args.node_name,
             )
             ch = WSServiceMessageChannel(
                 target_port=acc_cfg.target_port,
