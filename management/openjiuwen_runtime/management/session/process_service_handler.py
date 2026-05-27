@@ -19,6 +19,39 @@ from .runtime import IDeployController
 
 logger = get_logger(__name__)
 
+_SUBPROCESS_BOOTSTRAP_KEYS = (
+    "PATH",
+    "SYSTEMROOT",
+    "WINDIR",
+    "COMSPEC",
+    "TEMP",
+    "TMP",
+    "PYTHONHOME",
+    "VIRTUAL_ENV",
+    "PATHEXT",
+    "PROCESSOR_ARCHITECTURE",
+)
+
+
+def _subprocess_bootstrap_env() -> dict[str, str]:
+    """保留启动 Python 子进程所需的系统变量，不继承 Gateway 业务环境。"""
+    return {
+        key: value
+        for key, value in os.environ.items()
+        if key in _SUBPROCESS_BOOTSTRAP_KEYS and value
+    }
+
+
+def _build_agent_subprocess_env(env_vars: dict[str, str], *, host: str) -> dict[str, str]:
+    env = _subprocess_bootstrap_env()
+    env.update(env_vars)
+    env.setdefault("AGENT_SERVER_HOST", host)
+    home = env.get("HOME", "").strip()
+    if home and sys.platform == "win32":
+        # Windows 部分三方库（如 dashscope）通过 USERPROFILE 解析 home。
+        env.setdefault("USERPROFILE", home)
+    return env
+
 
 def _windows_system32_exe(filename: str) -> str:
     system_root = os.environ.get("SYSTEMROOT", r"C:\Windows")
@@ -68,9 +101,19 @@ class ProcessServiceHandler:
         if self._port <= 0:
             raise ValueError("publish_port must be set before ProcessServiceHandler.deploy()")
 
-        env = os.environ.copy()
-        env.update(self._env_vars)
-        env.setdefault("AGENT_SERVER_HOST", self._host)
+        env = _build_agent_subprocess_env(self._env_vars, host=self._host)
+
+        log_file_path = (self._env_vars.get("AGENT_SERVER_LOG_FILE") or "").strip()
+        stdout_target: Any = subprocess.DEVNULL
+        stderr_target: Any = subprocess.DEVNULL
+        log_file_handle = None
+        if log_file_path:
+            log_path = Path(log_file_path)
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            log_file_handle = log_path.open("a", encoding="utf-8")
+            stdout_target = log_file_handle
+            stderr_target = subprocess.STDOUT
+            logger.info("Process deploy 日志: %s", log_path)
 
         if self._launcher_script:
             cmd = [self._python, self._launcher_script, "--port", str(self._port)]
@@ -101,11 +144,13 @@ class ProcessServiceHandler:
         self._process = subprocess.Popen(
             cmd,
             env=env,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=stdout_target,
+            stderr=stderr_target,
             creationflags=creation_flags,
             preexec_fn=preexec_fn,
         )
+        if log_file_handle is not None:
+            log_file_handle.close()
         self._process_id = self._process.pid
 
         await self._wait_until_ready()
