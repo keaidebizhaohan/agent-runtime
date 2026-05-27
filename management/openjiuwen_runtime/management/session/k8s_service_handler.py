@@ -8,8 +8,8 @@ import asyncio
 import re
 import secrets
 import string
-from dataclasses import dataclass
-from typing import Dict, Optional, Tuple
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional, Tuple
 
 from kubernetes_asyncio import client, config
 from kubernetes_asyncio.client.rest import ApiException
@@ -25,10 +25,91 @@ class PodDeployInfo:
 
     pod_name: str
     namespace: str
-    port: int
     pod_ip: str
+    containers: Dict[str, "ContainerEndpoint"]
+    port: Optional[int] = None
     host_ip: Optional[str] = None
     node_name: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class ContainerEndpoint:
+    container_name: str
+    port: int
+    port_name: str
+
+
+@dataclass(frozen=True)
+class HostPathMount:
+    """容器内的 hostPath 挂载声明（对应 ``docker run -v HOST:CONTAINER[:ro]``）。
+
+    - ``host_path``: 宿主机绝对路径，写入 ``V1HostPathVolumeSource.path``
+    - ``mount_path``: 容器内目标路径
+    - ``read_only``: True 时挂载为只读
+    - ``host_path_type``: 对应 V1HostPathVolumeSource.type，缺省不校验路径类型
+    """
+
+    host_path: str
+    mount_path: str
+    read_only: bool = False
+    host_path_type: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        if not self.host_path:
+            raise ValueError("HostPathMount.host_path is required")
+        if not self.mount_path:
+            raise ValueError("HostPathMount.mount_path is required")
+
+
+@dataclass(frozen=True)
+class ContainerSpec:
+    name: str
+    image: str
+    port: int = 18092
+    port_name: str = "http1"
+    image_pull_policy: str = "IfNotPresent"
+    env_vars: Optional[Dict[str, str]] = None
+    # ---- 特权 / 安全相关（对应 docker run --cap-add / --security-opt / --privileged） ----
+    privileged: bool = False
+    """开启等价于 ``docker run --privileged``，会覆盖 capabilities/seccomp/apparmor 等更细字段。"""
+    capabilities_add: List[str] = field(default_factory=list)
+    """例如 ``["SYS_ADMIN", "NET_ADMIN"]``，对应 ``--cap-add``。"""
+    capabilities_drop: List[str] = field(default_factory=list)
+    """对应 ``--cap-drop``。"""
+    seccomp_unconfined: bool = False
+    """对应 ``--security-opt seccomp=unconfined``。"""
+    apparmor_unconfined: bool = False
+    """对应 ``--security-opt apparmor=unconfined``，会被翻译为 Pod 上的 annotation。"""
+    proc_mount_unmasked: bool = False
+    """对应 ``--security-opt systempaths=unconfined``，需 K8s 启用 ProcMountType feature gate；
+    若集群不支持，建议改用 ``privileged=True``。"""
+    run_as_user: Optional[int] = None
+    run_as_group: Optional[int] = None
+    allow_privilege_escalation: Optional[bool] = None
+    # ---- 端口暴露 ----
+    host_port: Optional[int] = None
+    """对应 ``docker run -p HOST_PORT:CONTAINER_PORT``，在 K8s 中即 ``containerPort.hostPort``。"""
+    # ---- hostPath 挂载（对应 ``docker run -v HOST:CTR``） ----
+    host_path_mounts: List[HostPathMount] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        if not self.name:
+            raise ValueError("container name is required")
+        if not self.image:
+            raise ValueError("container image is required")
+        port = int(self.port)
+        if port <= 0:
+            raise ValueError("container port must be positive")
+        object.__setattr__(self, "port", port)
+        object.__setattr__(self, "env_vars", dict(self.env_vars or {}))
+        object.__setattr__(self, "capabilities_add", list(self.capabilities_add or []))
+        object.__setattr__(self, "capabilities_drop", list(self.capabilities_drop or []))
+        object.__setattr__(self, "host_path_mounts", list(self.host_path_mounts or []))
+        if self.host_port is not None:
+            hp = int(self.host_port)
+            if hp <= 0 or hp > 65535:
+                raise ValueError("host_port must be in (0, 65535]")
+            object.__setattr__(self, "host_port", hp)
 
 
 class K8sServiceHandler:
@@ -39,16 +120,11 @@ class K8sServiceHandler:
 
     def __init__(
             self,
-            image: str,
             *,
+            containers: List[ContainerSpec],
             name_prefix: str = "jiuwenclaw",
             namespace: str = "default",
             pod_name: str = None,
-            container_name: str = "jiuwenclaw-agentserver",
-            container_port: int = 18092,
-            port_name: str = "http1",
-            image_pull_policy: str = "IfNotPresent",
-            env_vars: Optional[Dict[str, str]] = None,
             extra_labels: Optional[Dict[str, str]] = None,
             restart_policy: str = "Always",
             readiness_initial_delay: int = 5,
@@ -71,17 +147,15 @@ class K8sServiceHandler:
             cpu_limit: Optional[str] = None,
             memory_limit: Optional[str] = None,
     ):
-        if not image:
-            raise ValueError("image is required")
+        if not containers:
+            raise ValueError("containers must not be empty")
+        ports = [int(c.port) for c in containers]
+        if len(set(ports)) != len(ports):
+            raise ValueError("container ports must be unique in one pod")
 
-        self._image = image
+        self._containers = list(containers)
         self._name_prefix = pod_name if pod_name else self._sanitize_prefix(name_prefix)
         self._namespace = namespace
-        self._container_name = container_name
-        self._container_port = int(container_port)
-        self._port_name = port_name
-        self._image_pull_policy = image_pull_policy
-        self._env_vars: Dict[str, str] = dict(env_vars or {})
         self._extra_labels: Dict[str, str] = dict(extra_labels or {})
         self._restart_policy = restart_policy
         self._readiness_initial_delay = int(readiness_initial_delay)
@@ -125,6 +199,48 @@ class K8sServiceHandler:
         alphabet = string.ascii_lowercase + string.digits
         return "".join(secrets.choice(alphabet) for _ in range(length))
 
+    @classmethod
+    def _build_nfs_volume_name(cls, container_name: str, idx: int) -> str:
+        # K8s volume 名需符合 DNS-1123 label：小写字母数字或 '-'，长度 <= 63
+        sanitized = cls._NAME_INVALID_CHARS.sub("-", (container_name or "").lower()).strip("-")
+        base = sanitized or f"c{idx}"
+        # 预留 "nfs-" 前缀 4 字符，整体限制 63 字符
+        return f"nfs-{base[:59]}"
+
+    @classmethod
+    def _build_host_path_volume_name(cls, container_name: str, idx: int, mount_idx: int) -> str:
+        # 预留 "hp-" 前缀和索引后缀，避免同一 Pod 内多容器、多挂载重名。
+        sanitized = cls._NAME_INVALID_CHARS.sub("-", (container_name or "").lower()).strip("-")
+        base = sanitized or f"c{idx}"
+        suffix = f"-{idx}-{mount_idx}"
+        return f"hp-{base[: 63 - len('hp-') - len(suffix)]}{suffix}"
+
+    @staticmethod
+    def _build_security_context(spec: ContainerSpec) -> Optional[client.V1SecurityContext]:
+        capabilities = None
+        if spec.capabilities_add or spec.capabilities_drop:
+            capabilities = client.V1Capabilities(
+                add=spec.capabilities_add or None,
+                drop=spec.capabilities_drop or None,
+            )
+
+        seccomp_profile = None
+        if spec.seccomp_unconfined:
+            seccomp_profile = client.V1SeccompProfile(type="Unconfined")
+
+        fields = {
+            "privileged": spec.privileged,
+            "capabilities": capabilities,
+            "seccomp_profile": seccomp_profile,
+            "proc_mount": "Unmasked" if spec.proc_mount_unmasked else None,
+            "run_as_user": spec.run_as_user,
+            "run_as_group": spec.run_as_group,
+            "allow_privilege_escalation": spec.allow_privilege_escalation,
+        }
+        if all(value is None or value is False for value in fields.values()):
+            return None
+        return client.V1SecurityContext(**fields)
+
     def _generate_pod_name(self) -> str:
         return f"{self._name_prefix}-{self._random_suffix(10)}-{self._random_suffix(5)}"
 
@@ -144,83 +260,107 @@ class K8sServiceHandler:
         self._config_loaded = True
 
     def _build_pod_body(self, pod_name: str) -> client.V1Pod:
-        env_list = [client.V1EnvVar(name=k, value=str(v)) for k, v in self._env_vars.items()]
         labels: Dict[str, str] = {"app": pod_name}
         if self._extra_labels:
             labels.update(self._extra_labels)
 
-        volume_mounts = []
-        volumes = []
+        annotations: Dict[str, str] = {}
+        volumes: List[client.V1Volume] = []
+        nfs_enabled = bool(self._nfs_server and self._nfs_path and self._nfs_mount_path)
 
-        if self._nfs_server and self._nfs_path and self._nfs_mount_path:
-            nfs_volume_name = "nfs-volume"
-            volumes.append(
-                client.V1Volume(
-                    name=nfs_volume_name,
-                    nfs=client.V1NFSVolumeSource(
-                        server=self._nfs_server,
-                        path=self._nfs_path,
-                    ),
-                )
-            )
-            volume_mounts.append(
-                client.V1VolumeMount(
-                    name=nfs_volume_name,
-                    mount_path=self._nfs_mount_path,
-                )
-            )
-        if self._mode == "dev":
-            if self._host_path and self._host_mount_path:
-                host_volume_name = "host-volume"
+        pod_containers: List[client.V1Container] = []
+        for idx, spec in enumerate(self._containers):
+            env_list = [client.V1EnvVar(name=k, value=str(v)) for k, v in spec.env_vars.items()]
+
+            container_volume_mounts: List[client.V1VolumeMount] = []
+            if nfs_enabled:
+                nfs_volume_name = self._build_nfs_volume_name(spec.name, idx)
                 volumes.append(
                     client.V1Volume(
-                        name=host_volume_name,
-                        host_path=client.V1HostPathVolumeSource(
-                            path=self._host_path,  # 宿主机路径
+                        name=nfs_volume_name,
+                        nfs=client.V1NFSVolumeSource(
+                            server=self._nfs_server,
+                            path=self._nfs_path,
                         ),
                     )
                 )
-                volume_mounts.append(
+                container_volume_mounts.append(
                     client.V1VolumeMount(
-                        name=host_volume_name,
-                        mount_path=self._host_mount_path,  # 容器内路径
+                        name=nfs_volume_name,
+                        mount_path=self._nfs_mount_path,
                     )
                 )
 
-        container_resources = client.V1ResourceRequirements(
-            requests={
-                "cpu": self._cpu_request,
-                "memory": self._memory_request,
-            },
-            limits={
-                "cpu": self._cpu_limit,
-                "memory": self._memory_limit,
-            },
-        )
+            for mount_idx, mount in enumerate(spec.host_path_mounts):
+                volume_name = self._build_host_path_volume_name(spec.name, idx, mount_idx)
+                volumes.append(
+                    client.V1Volume(
+                        name=volume_name,
+                        host_path=client.V1HostPathVolumeSource(
+                            path=mount.host_path,
+                            type=mount.host_path_type,
+                        ),
+                    )
+                )
+                container_volume_mounts.append(
+                    client.V1VolumeMount(
+                        name=volume_name,
+                        mount_path=mount.mount_path,
+                        read_only=mount.read_only,
+                    )
+                )
 
-        container = client.V1Container(
-            name=self._container_name,
-            image=self._image,
-            image_pull_policy=self._image_pull_policy,
-            ports=[client.V1ContainerPort(name=self._port_name, container_port=self._container_port)],
-            env=env_list or None,
-            volume_mounts=volume_mounts or None,
-            resources=container_resources,
-            readiness_probe=client.V1Probe(
-                tcp_socket=client.V1TCPSocketAction(port=self._container_port),
-                initial_delay_seconds=self._readiness_initial_delay,
-                period_seconds=self._readiness_period,
-            ),
-        )
+            if spec.apparmor_unconfined:
+                annotations[
+                    f"container.apparmor.security.beta.kubernetes.io/{spec.name}"
+                ] = "unconfined"
+
+            container_resources = client.V1ResourceRequirements(
+                requests={
+                    "cpu": self._cpu_request,
+                    "memory": self._memory_request,
+                },
+                limits={
+                    "cpu": self._cpu_limit,
+                    "memory": self._memory_limit,
+                },
+            )
+            pod_containers.append(
+                client.V1Container(
+                    name=spec.name,
+                    image=spec.image,
+                    image_pull_policy=spec.image_pull_policy,
+                    ports=[
+                        client.V1ContainerPort(
+                            name=spec.port_name,
+                            container_port=spec.port,
+                            host_port=spec.host_port,
+                        )
+                    ],
+                    env=env_list or None,
+                    volume_mounts=container_volume_mounts or None,
+                    resources=container_resources,
+                    security_context=self._build_security_context(spec),
+                    readiness_probe=client.V1Probe(
+                        tcp_socket=client.V1TCPSocketAction(port=spec.port),
+                        initial_delay_seconds=self._readiness_initial_delay,
+                        period_seconds=self._readiness_period,
+                    ),
+                )
+            )
+
 
         return client.V1Pod(
             api_version="v1",
             kind="Pod",
             metadata=client.V1ObjectMeta(
-                name=pod_name, namespace=self._namespace, labels=labels
+                name=pod_name,
+                namespace=self._namespace,
+                labels=labels,
+                annotations=annotations or None,
             ),
             spec=client.V1PodSpec(
-                containers=[container],
+                containers=pod_containers,
                 restart_policy=self._restart_policy,
                 volumes=volumes or None,
                 node_name=self._node_name if self._mode == "dev" else None,
@@ -233,17 +373,14 @@ class K8sServiceHandler:
 
         pod_name = self._generate_pod_name()
         body = self._build_pod_body(pod_name)
+        image_list = ",".join(c.image for c in self._containers)
+        container_meta = ",".join(f"{c.name}:{c.port}" for c in self._containers)
         logger.info(
-            "K8s 创建 Pod: name=%s namespace=%s image=%s", pod_name, self._namespace, self._image
-        )
-        logger.debug(
-            "Pod 规约: container=%s port=%s resources(cpu/mem)=requests[%s/%s] limits[%s/%s]",
-            self._container_name,
-            self._container_port,
-            self._cpu_request,
-            self._memory_request,
-            self._cpu_limit,
-            self._memory_limit,
+            "K8s 创建 Pod: name=%s namespace=%s containers=%s images=%s",
+            pod_name,
+            self._namespace,
+            container_meta,
+            image_list,
         )
 
         api_client = client.ApiClient()
@@ -273,11 +410,20 @@ class K8sServiceHandler:
                 pod_ip,
                 node_name,
             )
+            endpoints = {
+                c.name: ContainerEndpoint(
+                    container_name=c.name,
+                    port=c.port,
+                    port_name=c.port_name,
+                )
+                for c in self._containers
+            }
             return PodDeployInfo(
                 pod_name=pod_name,
                 namespace=self._namespace,
-                port=self._container_port,
                 pod_ip=pod_ip,
+                containers=endpoints,
+                port=self._containers[0].port,
                 host_ip=host_ip,
                 node_name=node_name,
             )
@@ -331,7 +477,7 @@ class K8sServiceHandler:
                     "K8s Pod 就绪超时: name=%s phase=%s last_reason=%s", pod_name, phase, last_reason
                 )
                 raise TimeoutError(
-                    f"Pod {pod_name} not Running 1/1 within {self._ready_timeout}s "
+                    f"Pod {pod_name} not Running/Ready within {self._ready_timeout}s "
                     f"(phase={phase!r}, last_reason={last_reason!r})"
                 )
             logger.debug("K8s 等待 Pod 就绪: name=%s phase=%s", pod_name, phase)

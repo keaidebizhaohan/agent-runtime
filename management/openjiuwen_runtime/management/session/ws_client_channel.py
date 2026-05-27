@@ -79,14 +79,17 @@ class WSServiceMessageChannel:
 
     def __init__(
             self,
-            target_port: int,
+            target_port: Optional[int] = None,
             invoke_path: str = "",
             *,
+            target_container: Optional[str] = None,
             ws_use_tls: bool = False,
             payload_from_raw: Optional[PayloadBuilder] = None,
             connect_timeout: float = 30.0,
     ) -> None:
-        self._port = int(target_port)
+        self._fallback_port = int(target_port) if target_port is not None else None
+        self._port = self._fallback_port or 0
+        self._target_container = target_container
         self._path = invoke_path
         self._use_tls = ws_use_tls
         self._payload_from_raw: PayloadBuilder = (
@@ -107,7 +110,11 @@ class WSServiceMessageChannel:
         self._request_done: Dict[str, asyncio.Event] = {}
         self._last_service_id: str = ""
         logger.debug(
-            "WSServiceMessageChannel: port=%s path=%s tls=%s", target_port, invoke_path, ws_use_tls
+            "WSServiceMessageChannel: port=%s container=%s path=%s tls=%s",
+            target_port,
+            target_container,
+            invoke_path,
+            ws_use_tls,
         )
 
     def bind_handler(
@@ -126,20 +133,37 @@ class WSServiceMessageChannel:
     async def on_pod_ready(self, service_id: str, pod_info: Any) -> None:
         """由 ``ServiceHandler.deploy`` 在 Pod/容器可用后回调，组合 URL，并**预建 WebSocket 链**后返回。
 
-        此前仅在此写入 URL、首次 ``send`` 才 ``connect``，会出现：K8s 已 Ready 但业务/WS
-        尚未监听，或 ``target_port`` 与 Pod ``container_port`` 不一致，导致发不出去。此处用
-        ``pod_info.port``（K8s/Docker 部署声明的端口）覆盖通道端口，并 ``await
-        _ensure_connected()``，使 ``deploy`` 在「能连上 WS」之后才结束。
+        对多 container Pod，优先使用 ``target_container`` 在 ``pod_info.containers`` 中
+        选择端口；若未提供则回退到 ``pod_info.port``，最后回退到构造时 ``target_port``。
         """
         # K8s: PodDeployInfo.pod_ip + port；Docker: DockerRunInfo.host + port
         host = getattr(pod_info, "pod_ip", None) or getattr(pod_info, "host", None)
         if not host or not str(host).strip():
             raise ValueError("pod_info 中缺少可连接的 host (pod_ip 或 host)")
-        p_attr = getattr(pod_info, "port", None)
-        if p_attr is not None:
-            pi = int(p_attr)
-            if pi > 0:
-                self._port = pi
+
+        selected_port: Optional[int] = None
+        container_map = getattr(pod_info, "containers", None)
+        if isinstance(container_map, dict) and container_map and self._target_container:
+            endpoint = container_map.get(self._target_container)
+            if endpoint is None:
+                raise ValueError(f"pod_info.containers 中不存在 container={self._target_container}")
+            endpoint_port = getattr(endpoint, "port", None)
+            if endpoint_port is not None:
+                pi = int(endpoint_port)
+                if pi > 0:
+                    selected_port = pi
+
+        if selected_port is None:
+            p_attr = getattr(pod_info, "port", None)
+            if p_attr is not None:
+                pi = int(p_attr)
+                if pi > 0:
+                    selected_port = pi
+        if selected_port is None:
+            selected_port = self._fallback_port
+        if selected_port is None or selected_port <= 0:
+            raise ValueError("无法确定可连接端口: 缺少 pod_info.port 且未提供可用 target_port")
+        self._port = selected_port
         self._ws_url = _build_ws_url(str(host), self._port, self._path, self._use_tls)
         self._last_service_id = service_id
         logger.info("WSS 基址已就绪: service_id=%s url=%s", service_id, self._ws_url)
