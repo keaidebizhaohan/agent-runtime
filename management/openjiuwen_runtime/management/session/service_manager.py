@@ -38,7 +38,7 @@ class ServiceManager(IServiceManager):
         timer: ITimer,
         *,
         service_concurrency: int = 200,
-        min_idle_services: int = 0,
+        min_idle_services: int = 1,
         max_services: int = 10,
         autoscale_interval: float = 0.5,
         service_idle_ttl: int = 300,
@@ -51,12 +51,15 @@ class ServiceManager(IServiceManager):
         self._max_services = max_services
         self._autoscale_interval = autoscale_interval
         self._service_idle_ttl = service_idle_ttl
-        self._generation: int = 0
 
         self._response_parser: Optional[IResponseParser] = None
         self._lock = asyncio.Lock()
-        self._in_use: dict[str, IServiceHandler] = {}
-        self._idle: dict[str, IServiceHandler] = {}
+        # 按 template_id 分组的服务实例池: {template_id: {service_id: IServiceHandler}}
+        # template_id 为 None 时表示未指定模板的默认组
+        self._in_use: dict[Optional[str], dict[str, IServiceHandler]] = {}
+        self._idle: dict[Optional[str], dict[str, IServiceHandler]] = {}
+        # 服务模板配置列表: [{template_id, min_idle, max_services, ...}]
+        self._service_templates: list[Dict[str, Any]] = []
         self._service_router = ServiceRouter()
         self._running = False
         self._message_task: Optional[asyncio.Task[Any]] = None
@@ -84,13 +87,56 @@ class ServiceManager(IServiceManager):
             self._service_idle_ttl,
         )
 
+    async def load_template_config(self) -> list[Dict[str, Any]]:
+        """加载服务模板配置。子类可重写此方法以从外部加载配置。
+
+        Returns:
+            服务模板配置列表，每个元素包含 template_id、min_idle、max_services 等配置。
+            默认返回空列表，表示使用全局默认配置。
+        """
+        return []
+
     async def start(self) -> None:
         if self._running:
             logger.debug("ServiceManager start 被忽略: 已在运行中")
             return
         self._running = True
+
+        # 加载模板配置
+        service_templates = await self.load_template_config()
+
+        async with self._lock:
+            self._service_templates = service_templates
+
+            # 为所有 template_id 初始化池结构
+            for tpl in service_templates:
+                template_id = tpl.get("template_id")
+                if template_id not in self._in_use:
+                    self._in_use[template_id] = {}
+                if template_id not in self._idle:
+                    self._idle[template_id] = {}
+
+            # 确保默认组（None）也存在
+            if None not in self._in_use:
+                self._in_use[None] = {}
+            if None not in self._idle:
+                self._idle[None] = {}
+
+        if service_templates:
+            logger.info(
+                "ServiceManager 已加载模板配置: templates_count=%s template_ids=%s",
+                len(service_templates),
+                [tpl.get("template_id") for tpl in service_templates],
+            )
+        else:
+            logger.info("ServiceManager 使用默认配置（无模板配置）")
+
         # 消息循环：从双队列取件；用户请求会 spawn 成独立 task，不阻塞下一条入队
         self._message_task = asyncio.create_task(self._message_loop())
+        # 启动 autoscale 循环：定期检查并维护 min_idle、回收多余 idle 实例
+        self._autoscale_task = asyncio.create_task(self._autoscale_loop())
+        # 预拉热：根据模板配置拉起 min_idle 数量的空闲实例
+        await self._bootstrap_min_idle()
         logger.info(
             "ServiceManager 已启动, 预拉热完成, 当前实例数=%s", self._total_services()
         )
@@ -131,8 +177,11 @@ class ServiceManager(IServiceManager):
         n_release = 0
         all_handlers: list[IServiceHandler] = []
         async with self._lock:
-            all_handlers.extend(self._in_use.values())
-            all_handlers.extend(self._idle.values())
+            # 遍历所有模板组的实例
+            for pool in self._in_use.values():
+                all_handlers.extend(pool.values())
+            for pool in self._idle.values():
+                all_handlers.extend(pool.values())
             self._in_use.clear()
             self._idle.clear()
         n_release = len(all_handlers)
@@ -171,47 +220,58 @@ class ServiceManager(IServiceManager):
             self._q.system_qsize(),
         )
 
-    async def update_config(self, **kwargs) -> None:
-        async with self._lock:
-            self._generation += 1
-            for key, value in kwargs.items():
-                if key == "min_idle_services":
-                    self._min_idle = value
-                elif key == "max_services":
-                    self._max_services = value
-                elif key == "service_idle_ttl":
-                    self._service_idle_ttl = value
-                elif key == "autoscale_interval":
-                    self._autoscale_interval = value
-            # 立即回收旧代际 idle service（无 session/inflight，安全删除）
-            to_reclaim = []
-            for sid, h in self._idle.items():
-                if (h.generation != self._generation
-                        and h.active_session_count == 0
-                        and h.inflight_requests == 0):
-                    to_reclaim.append(sid)
-            for sid in to_reclaim:
-                h = self._idle.pop(sid, None)
-                if h:
-                    try:
-                        await h.delete()
-                        logger.info(
-                            "热更新: 已回收旧代际 idle service: service_id=%s old_gen=%s new_gen=%s",
-                            sid, h.generation, self._generation,
-                        )
-                    except Exception as e:  # noqa: BLE001
-                        logger.error("回收旧代际 idle service 失败: service_id=%s err=%s", sid, e)
-            logger.info(
-                "ServiceManager 配置已更新: generation=%s min_idle=%s max=%s idle_ttl=%s autoscale=%s",
-                self._generation,
-                self._min_idle,
-                self._max_services,
-                self._service_idle_ttl,
-                self._autoscale_interval,
-            )
-
     def _total_services(self) -> int:
-        return len(self._in_use) + len(self._idle)
+        """获取所有模板组的总实例数。"""
+        total = 0
+        for pool in self._in_use.values():
+            total += len(pool)
+        for pool in self._idle.values():
+            total += len(pool)
+        return total
+
+    def _get_template_min_idle(self, template_id: Optional[str]) -> int:
+        """获取指定 template_id 的最小空闲实例数配置。
+
+        优先使用模板配置中的 min_idle_services 字段，如果不存在则回退到全局配置。
+        """
+        if not self._service_templates:
+            return self._min_idle
+
+        for tpl in self._service_templates:
+            if tpl.get("template_id") == template_id:
+                # 优先使用模板中的 min_idle_services 字段
+                min_idle_val = tpl.get("min_idle_services")
+                if min_idle_val is not None:
+                    return min_idle_val
+
+        return self._min_idle
+
+    def _get_template_max_services(self, template_id: Optional[str]) -> int:
+        """获取指定 template_id 的最大服务实例数配置。
+
+        优先使用模板配置中的 max_services 字段，如果不存在则回退到全局配置。
+        """
+        if not self._service_templates:
+            return self._max_services
+
+        for tpl in self._service_templates:
+            if tpl.get("template_id") == template_id:
+                # 优先使用模板中的 max_services 字段
+                max_services_val = tpl.get("max_services")
+                if max_services_val is not None:
+                    return max_services_val
+
+        return self._max_services
+
+    def _total_services_by_template(self, template_id: Optional[str]) -> int:
+        """获取指定 template_id 的总实例数（in_use + idle）。"""
+        in_use_count = len(self._in_use.get(template_id, {}))
+        idle_count = len(self._idle.get(template_id, {}))
+        return in_use_count + idle_count
+
+    def _idle_count_by_template(self, template_id: Optional[str]) -> int:
+        """获取指定 template_id 的空闲实例数。"""
+        return len(self._idle.get(template_id, {}))
 
     def _discard_user_route_task(self, task: asyncio.Task[Any]) -> None:
         self._user_route_tasks.discard(task)
@@ -260,39 +320,109 @@ class ServiceManager(IServiceManager):
     async def _bootstrap_min_idle(self) -> None:
         if self._min_idle <= 0:
             return
-        async with self._lock:
-            cur_gen_idle = sum(1 for h in self._idle.values() if h.generation == self._generation)
-            while cur_gen_idle < self._min_idle and self._total_services() < self._max_services:
-                h = await self._new_deployed()
-                if h is None:
-                    logger.error("预拉热失败: factory/deploy 未返回可用实例, 已停止继续拉起")
-                    break
-                self._idle[h.id] = h
-                cur_gen_idle += 1
-                logger.info("预拉热: 新实例入 idle, service_id=%s gen=%s", h.id, h.generation)
+
+        # 如果没有配置模板，使用默认配置拉起
+        if not self._service_templates:
+            if self._min_idle <= 0:
+                return
+            async with self._lock:
+                template_id = None
+                while self._idle_count_by_template(template_id) < self._min_idle and \
+                      self._total_services_by_template(template_id) < self._max_services:
+                    h = await self._new_deployed()
+                    if h is None:
+                        logger.error("预拉热失败: factory/deploy 未返回可用实例, 已停止继续拉起")
+                        break
+                    self._idle.setdefault(template_id, {})[h.id] = h
+                    logger.info("预拉热: 新实例入 idle (default), service_id=%s", h.id)
+            return
+
+        # 按每个模板配置分别拉起
+        for tpl in self._service_templates:
+            template_id = tpl.get("template_id")
+            # 优先使用模板配置中的 min_idle_services 字段
+            min_idle_services = tpl.get("min_idle_services", self._min_idle)
+            max_services = tpl.get("max_services", self._max_services)
+
+            if min_idle_services <= 0:
+                continue
+
+            async with self._lock:
+                while self._idle_count_by_template(template_id) < min_idle_services and \
+                      self._total_services_by_template(template_id) < max_services:
+                    h = await self._new_deployed(tpl)
+                    if h is None:
+                        logger.error(
+                            "预拉热失败 (template_id=%s): factory/deploy 未返回可用实例, 已停止继续拉起",
+                            template_id
+                        )
+                        break
+                    self._idle.setdefault(template_id, {})[h.id] = h
+                    logger.info(
+                        "预拉热: 新实例入 idle (template_id=%s), service_id=%s",
+                        template_id, h.id
+                    )
+
         # 预拉热入 idle 的实例不启动「in_use→idle / 删 Pod」的 service_ttl 计时
 
     async def _ensure_min_idle(self) -> None:
         if self._min_idle <= 0:
             return
-        _first_gap = True
-        async with self._lock:
-            cur_gen_idle = sum(1 for h in self._idle.values() if h.generation == self._generation)
-            while cur_gen_idle < self._min_idle and self._total_services() < self._max_services:
-                if _first_gap:
-                    _first_gap = False
-                    logger.debug(
-                        "autoscale: min_idle=%s 但当前同代际 idle=%s (total=%s), 将补发新实例以维持热备",
-                        self._min_idle,
-                        cur_gen_idle,
-                        self._total_services(),
+
+        # 如果没有配置模板，使用默认配置
+        if not self._service_templates:
+            if self._min_idle <= 0:
+                return
+            template_id = None
+            _first_gap = True
+            async with self._lock:
+                while self._idle_count_by_template(template_id) < self._min_idle and \
+                      self._total_services_by_template(template_id) < self._max_services:
+                    if _first_gap:
+                        _first_gap = False
+                        logger.debug(
+                            "autoscale: min_idle=%s 但当前 idle=%s (total=%s), 将补发新实例以维持热备",
+                            self._min_idle,
+                            self._idle_count_by_template(template_id),
+                            self._total_services_by_template(template_id),
+                        )
+                    h = await self._new_deployed()
+                    if h is None:
+                        break
+                    self._idle.setdefault(template_id, {})[h.id] = h
+                    logger.info("autoscale: 新实例入 idle (default), service_id=%s", h.id)
+            return
+
+        # 按每个模板配置分别维护
+        for tpl in self._service_templates:
+            template_id = tpl.get("template_id")
+            # 优先使用模板配置中的 min_idle_services 字段
+            min_idle_services = tpl.get("min_idle_services", self._min_idle)
+            max_services = tpl.get("max_services", self._max_services)
+
+            if min_idle_services <= 0:
+                continue
+
+            _first_gap = True
+            async with self._lock:
+                while self._idle_count_by_template(template_id) < min_idle_services and \
+                      self._total_services_by_template(template_id) < max_services:
+                    if _first_gap:
+                        _first_gap = False
+                        logger.debug(
+                            "autoscale (template_id=%s): min_idle_services=%s 但当前 idle=%s (total=%s), 将补发新实例",
+                            template_id, min_idle_services,
+                            self._idle_count_by_template(template_id),
+                            self._total_services_by_template(template_id),
+                        )
+                    h = await self._new_deployed(tpl)
+                    if h is None:
+                        break
+                    self._idle.setdefault(template_id, {})[h.id] = h
+                    logger.info(
+                        "autoscale: 新实例入 idle (template_id=%s), service_id=%s",
+                        template_id, h.id
                     )
-                h = await self._new_deployed()
-                if h is None:
-                    break
-                self._idle[h.id] = h
-                cur_gen_idle += 1
-                logger.info("autoscale: 新实例入 idle, service_id=%s gen=%s", h.id, h.generation)
         # 新入 idle 的实例不启动 service_ttl 删 Pod；仅 min_idle 维持数量
 
     async def _new_deployed(
@@ -305,7 +435,6 @@ class ServiceManager(IServiceManager):
         except Exception as e:  # noqa: BLE001
             logger.error("创建服务实例失败 (factory): %s", e, exc_info=True)
             return None
-        h.generation = self._generation
         h.set_idle_pool_transition_hook(self._on_in_use_may_move_to_idle_pool)
         try:
             await h.deploy()
@@ -356,8 +485,11 @@ class ServiceManager(IServiceManager):
                                 h.id,
                             )
             if h is not None:
-                # 新消息分配到该服务：取消 service_ttl 计时（in_use→idle 转入）
+                # 新消息分配到该服务：取消所有相关计时器
+                # 1. 取消 in_use→idle 计时（如果实例之前在 in_use 且等待转入 idle）
+                # 2. 取消 excess_idle 回收计时（如果实例之前在 idle 且可能被回收）
                 await self._cancel_in_use_to_idle_timer(h.id)
+                await self._cancel_excess_idle_timer(h.id)
 
             if h is None:
                 await self._fail(w, 100001, session_id=session_id)
@@ -441,10 +573,21 @@ class ServiceManager(IServiceManager):
     async def _flush_pending_expired_for_service(self, service_id: str) -> None:
         """清理 service 上所有「到期但仍 inflight」的 session；若清理后 sessions=0 且 inflight=0, arm service_ttl。"""
         h: Optional[IServiceHandler] = None
+        # 在所有模板组中查找该 service_id
         async with self._lock:
-            h = self._in_use.get(service_id) or self._idle.get(service_id)
+            for pool in self._in_use.values():
+                if service_id in pool:
+                    h = pool[service_id]
+                    break
+            if h is None:
+                for pool in self._idle.values():
+                    if service_id in pool:
+                        h = pool[service_id]
+                        break
+
         if h is None:
             return
+
         async with self._lock:
             sids = [
                 sid
@@ -462,8 +605,16 @@ class ServiceManager(IServiceManager):
                         service_id,
                         h.active_session_count,
                     )
-        # 仅 in_use 上需 arm service_ttl；arm 内部还会再判一次状态防竞争
-        if service_id in self._in_use:
+
+        # 检查是否在 in_use 中（遍历所有模板组）
+        in_in_use = False
+        async with self._lock:
+            for pool in self._in_use.values():
+                if service_id in pool:
+                    in_in_use = True
+                    break
+
+        if in_in_use:
             await self._arm_in_use_to_idle_pool(service_id)
 
     async def _on_in_use_may_move_to_idle_pool(self, service_id: str) -> None:
@@ -480,15 +631,24 @@ class ServiceManager(IServiceManager):
 
     async def _arm_in_use_to_idle_pool(self, service_id: str) -> None:
         """in_use 实例的所有 session 均已归还且无 in-flight: 等待 service_ttl 后转入 _idle。"""
+        h: Optional[IServiceHandler] = None
+        # 在所有模板组的 in_use 池中查找
         async with self._lock:
-            h = self._in_use.get(service_id)
-            if h is None:
-                return
+            for pool in self._in_use.values():
+                if service_id in pool:
+                    h = pool[service_id]
+                    break
+
+        if h is None:
+            return
+
+        async with self._lock:
             if h.inflight_requests > 0 or h.active_session_count > 0:
                 # 仍有业务/会话占用, 不 arm
                 return
-            # 获取 service_ttl，如果为 None 则使用 Manager 的默认值
-            service_ttl = h.service_ttl if h.service_ttl is not None else self._service_idle_ttl
+
+        # 获取 service_ttl，如果为 None 则使用 Manager 的默认值
+        service_ttl = h.service_ttl if h.service_ttl is not None else self._service_idle_ttl
         if service_ttl < 0:
             return
         if service_ttl == 0:
@@ -513,10 +673,21 @@ class ServiceManager(IServiceManager):
 
     async def _move_in_use_to_idle_pool(self, service_id: str) -> None:
         """service_ttl 到期: 若仍无 session/inflight 则转入 idle 池；否则让出（说明 ttl 内来了新业务）。"""
+        template_id: Optional[str] = None
+        oh: Optional[IServiceHandler] = None
+        moved = False
+
         async with self._lock:
-            oh = self._in_use.get(service_id)
+            # 在锁内查找并移动，避免竞态
+            for tid, pool in self._in_use.items():
+                if service_id in pool:
+                    template_id = tid
+                    oh = pool[service_id]
+                    break
+
             if oh is None:
                 return
+
             if oh.inflight_requests > 0 or oh.active_session_count > 0:
                 # service_ttl 期间又被分配了 session/请求, 让出 (不再强行驱逐)
                 logger.info(
@@ -526,13 +697,31 @@ class ServiceManager(IServiceManager):
                     oh.inflight_requests,
                 )
                 return
-            self._in_use.pop(oh.id, None)
-            self._idle[oh.id] = oh
+
+            # 从 in_use 移除，加入 idle
+            if template_id is not None:
+                self._in_use[template_id].pop(oh.id, None)
+                self._idle.setdefault(template_id, {})[oh.id] = oh
+                moved = True
+            else:
+                # 兼容旧逻辑：可能在 None 组中
+                for tid, pool in self._in_use.items():
+                    if service_id in pool:
+                        pool.pop(service_id, None)
+                        self._idle.setdefault(tid, {})[service_id] = oh
+                        template_id = tid
+                        moved = True
+                        break
+
+        if not moved:
+            return
+
+        min_idle_for_tpl = self._get_template_min_idle(template_id)
         logger.info(
-            "实例已自 in_use 转入 idle 池: service_id=%s, 当前 idle=%s min_idle=%s",
-            service_id,
-            len(self._idle),
-            self._min_idle,
+            "实例已自 in_use 转入 idle 池: service_id=%s template_id=%s, 当前 idle=%s min_idle=%s",
+            service_id, template_id,
+            self._idle_count_by_template(template_id),
+            min_idle_for_tpl,
         )
         # 本实例在 in_use 已等满一次 service_ttl, 若 idle>min 直接回收 Pod, 不再二次等待
         await self._schedule_excess_idle_reclaim_if_needed(after_in_use_to_idle=True)
@@ -540,41 +729,49 @@ class ServiceManager(IServiceManager):
     async def _schedule_excess_idle_reclaim_if_needed(
         self, *, after_in_use_to_idle: bool = False
     ) -> None:
-        """当 len(idle) > min_idle 时，回收一台多余 idle：默认再等待 service_ttl；入 idle 后若
+        """当某模板组的 len(idle) > min_idle 时，回收该组的一台多余 idle：默认再等待 service_ttl；入 idle 后若
         `after_in_use_to_idle` 为 True 则**不再**叠二次 ttl（与 in_use 阶段无业务等待合并）。
         """
         candidate: Optional[str] = None
         candidate_h: Optional[IServiceHandler] = None
+        candidate_template_id: Optional[str] = None
+
         async with self._lock:
-            if len(self._idle) <= self._min_idle:
-                return
-            for sid in reversed(list(self._idle.keys())):
-                if sid not in self._excess_idle_timer_armed:
-                    candidate = sid
-                    candidate_h = self._idle.get(sid)
+            # 遍历所有模板组，找到第一个需要回收的组
+            for template_id, idle_pool in self._idle.items():
+                min_idle_for_tpl = self._get_template_min_idle(template_id)
+                if len(idle_pool) <= min_idle_for_tpl:
+                    continue
+
+                # 在该组中找到一个未被 arm 的候选实例
+                for sid in reversed(list(idle_pool.keys())):
+                    if sid not in self._excess_idle_timer_armed:
+                        candidate = sid
+                        candidate_h = idle_pool.get(sid)
+                        candidate_template_id = template_id
+                        break
+
+                if candidate is not None:
                     break
         if candidate is None or candidate_h is None:
             return
+
         # 获取该实例的 service_ttl，如果为 None 则使用 Manager 的默认值
         service_ttl = candidate_h.service_ttl if candidate_h.service_ttl is not None else self._service_idle_ttl
-        # 旧代际 idle：立即回收，不等 service_ttl
-        if candidate_h.generation != self._generation:
-            self._excess_idle_timer_armed.add(candidate)
-            await self.enqueue_system(ServiceReclaimEvent(service_id=candidate))
-            logger.debug("旧代际 idle 立即回收入队: service_id=%s gen=%s", candidate, candidate_h.generation)
-            return
+        min_idle_for_tpl = self._get_template_min_idle(candidate_template_id)
+
         # in_use 已按同字段等过一次；或显式 service_ttl=0
         if service_ttl == 0 or after_in_use_to_idle:
             self._excess_idle_timer_armed.add(candidate)
             await self.enqueue_system(ServiceReclaimEvent(service_id=candidate))
             logger.debug(
-                "多余 idle 立即回收入队: service_id=%s (merge_ttl=%s)",
-                candidate,
-                after_in_use_to_idle,
+                "多余 idle 立即回收入队: service_id=%s template_id=%s (merge_ttl=%s)",
+                candidate, candidate_template_id, after_in_use_to_idle,
             )
             return
         if service_ttl < 0:
             return
+
         self._excess_idle_timer_armed.add(candidate)
         key = f"excess_idle:svc:{candidate}"
         await self._timer.cancel_timer(key)
@@ -582,27 +779,36 @@ class ServiceManager(IServiceManager):
         async def _go() -> None:
             self._excess_idle_timer_armed.discard(candidate)
             async with self._lock:
-                if len(self._idle) <= self._min_idle or candidate not in self._idle:
+                idle_pool = self._idle.get(candidate_template_id, {})
+                if len(idle_pool) <= min_idle_for_tpl or candidate not in idle_pool:
                     return
             await self.enqueue_system(ServiceReclaimEvent(service_id=candidate))
 
         await self._timer.start_timer(key, service_ttl, _go)
         logger.info(
-            "已 arm 多余 idle 回收: service_id=%s ttl=%s (idle>min=%s)",
-            candidate,
-            service_ttl,
-            self._min_idle,
+            "已 arm 多余 idle 回收: service_id=%s template_id=%s ttl=%s (idle=%s>min=%s)",
+            candidate, candidate_template_id, service_ttl,
+            self._idle_count_by_template(candidate_template_id),
+            min_idle_for_tpl,
         )
 
     async def _on_service_reclaim(self, service_id: str) -> None:
         self._excess_idle_timer_armed.discard(service_id)
         h: Optional[IServiceHandler] = None
         should_delete = False
+        template_id: Optional[str] = None
+
         async with self._lock:
-            oh = self._idle.get(service_id)
-            if oh is None:
+            # 找到 service_id 所属的 template_id 组
+            for tid, idle_pool in self._idle.items():
+                if service_id in idle_pool:
+                    oh = idle_pool[service_id]
+                    template_id = tid
+                    break
+            else:
                 logger.debug("缩容跳过: idle 中无此实例 service_id=%s", service_id)
                 return
+
             if oh.active_session_count > 0 or oh.inflight_requests > 0:
                 logger.debug(
                     "缩容跳过: 实例仍活跃 session仍=%s inflight=%s",
@@ -610,71 +816,131 @@ class ServiceManager(IServiceManager):
                     oh.inflight_requests,
                 )
                 return
-            if len(self._idle) <= self._min_idle:
+
+            min_idle_for_tpl = self._get_template_min_idle(template_id)
+            if len(self._idle.get(template_id, {})) <= min_idle_for_tpl:
                 logger.debug(
-                    "缩容跳过: idle~=%s 已不大于 min_idle=%s，不删以保常驻底数",
-                    len(self._idle),
-                    self._min_idle,
+                    "缩容跳过: template_id=%s idle~=%s 已不大于 min_idle=%s，不删以保常驻底数",
+                    template_id, len(self._idle.get(template_id, {})), min_idle_for_tpl,
                 )
                 return
-            self._idle.pop(service_id, None)
+
+            self._idle[template_id].pop(service_id, None)
             h = oh
             should_delete = True
         if not should_delete or h is None:
             return
         try:
             await h.delete()
-            logger.info("缩容已删除 idle 实例: service_id=%s (多余或系统事件)", service_id)
+            logger.info(
+                "缩容已删除 idle 实例: service_id=%s template_id=%s (多余或系统事件)",
+                service_id, template_id
+            )
         except Exception as e:  # noqa: BLE001
             logger.error("缩容 delete 失败: service_id=%s err=%s", service_id, e, exc_info=True)
             return
         await self._schedule_excess_idle_reclaim_if_needed()
 
     async def _pick_or_create(self, sreq) -> Optional[IServiceHandler]:  # noqa: ANN001
-        # 1) 亲和：该 session 已绑定到某 service，则复用（不管代际）
-        # 2) 否则在 in_use/idle 中找同代际且尚有服务级并发的实例
-        # 3) 再否则在 max 允许下新 deploy（带当前 generation）
+        """根据 session 请求选择或创建服务实例。
+
+        选择策略：
+        1) 亲和：该 session 已绑定到某 service，则复用
+        2) 否则在相同 template_id 组的 in_use/idle 池中找尚有服务级并发的实例
+        3) 再否则在该 template_id 组的 max 允许下新 deploy
+        """
         need = max(1, int(sreq.session_concurrency))
         session_id = sreq.session_id
+
+        # 获取 template_id
+        template_id: Optional[str] = None
+        if sreq.service_template:
+            template_id = sreq.service_template.get("template_id")
+
+        # 1) 亲和：该 session 已绑定到某 service，则复用
         sid = await self._service_router.get_session_service(session_id)
         if sid is not None:
-            h = self._in_use.get(sid) or self._idle.get(sid)
+            # 在所有模板组中查找该 service_id
+            h: Optional[IServiceHandler] = None
+            found_template_id: Optional[str] = None
+            for tid, pool in self._in_use.items():
+                if sid in pool:
+                    h = pool[sid]
+                    found_template_id = tid
+                    break
+
+            if h is None:
+                for tid, pool in self._idle.items():
+                    if sid in pool:
+                        h = pool[sid]
+                        found_template_id = tid
+                        break
+
             if h is None:
                 await self._service_router.delete_session_service(session_id)
                 logger.debug("亲和失效: 路由表有记录但池无此实例, 已删映射 session_id=%s", session_id)
             else:
-                if h.id in self._idle:
-                    self._idle.pop(h.id, None)
-                    self._in_use[h.id] = h
-                    await self._cancel_in_use_to_idle_timer(h.id)
-                    await self._cancel_excess_idle_timer(h.id)
-                    logger.debug("从 idle 取回实例, service_id=%s", h.id)
+                # 从 idle 移到 in_use
+                if found_template_id is not None:
+                    if sid in self._idle.get(found_template_id, {}):
+                        self._idle[found_template_id].pop(sid, None)
+                        self._in_use.setdefault(found_template_id, {})[sid] = h
+                else:
+                    # 兼容旧逻辑
+                    for tid, pool in self._idle.items():
+                        if sid in pool:
+                            pool.pop(sid, None)
+                            self._in_use.setdefault(tid, {})[sid] = h
+                            break
+
+                # 注意：计时器取消由调用者 _handle_user_request 在锁外统一处理
+                logger.debug("从 idle 取回实例, service_id=%s template_id=%s", h.id, found_template_id)
                 return h
-        # 新 session：只选同代际
-        for h in self._in_use.values():
-            if h.generation == self._generation and h.available_concurrency >= need:
-                logger.debug("选用 in_use 实例: service_id=%s gen=%s avail=%s", h.id, h.generation, h.available_concurrency)
+
+        # 2) 新 session：在相同 template_id 组的 in_use/idle 中找实例
+        target_template_id = template_id
+
+        # 先在 in_use 池中查找
+        in_use_pool = self._in_use.get(target_template_id, {})
+        for h in in_use_pool.values():
+            if h.available_concurrency >= need:
+                logger.debug(
+                    "选用 in_use 实例 (template_id=%s): service_id=%s avail=%s",
+                    target_template_id, h.id, h.available_concurrency
+                )
                 return h
-        for h in list(self._idle.values()):
-            if h.generation == self._generation and h.available_concurrency >= need:
-                self._idle.pop(h.id, None)
-                self._in_use[h.id] = h
-                await self._cancel_in_use_to_idle_timer(h.id)
-                await self._cancel_excess_idle_timer(h.id)
-                logger.debug("从 idle 唤醒同代际实例: service_id=%s gen=%s", h.id, h.generation)
+
+        # 再在 idle 池中查找
+        idle_pool = self._idle.get(target_template_id, {})
+        for h in list(idle_pool.values()):
+            if h.available_concurrency >= need:
+                idle_pool.pop(h.id, None)
+                self._in_use.setdefault(target_template_id, {})[h.id] = h
+                # 注意：计时器取消由调用者 _handle_user_request 在锁外统一处理
+                logger.debug(
+                    "从 idle 唤醒实例 (template_id=%s): service_id=%s",
+                    target_template_id, h.id
+                )
                 return h
-        if self._total_services() >= self._max_services:
+
+        # 3) 未找到匹配实例，在该 template_id 组的 max 允许下新 deploy
+        max_services_for_tpl = self._get_template_max_services(target_template_id)
+        if self._total_services_by_template(target_template_id) >= max_services_for_tpl:
             logger.debug(
-                "pick: 未选到可用实例且已达 max_services=%s, 当前总实例=%s",
-                self._max_services,
-                self._total_services(),
+                "pick: 未选到可用实例且 template_id=%s 已达 max_services=%s, 当前该组实例=%s",
+                target_template_id, max_services_for_tpl,
+                self._total_services_by_template(target_template_id),
             )
             return None
+
         h2 = await self._new_deployed(sreq.service_template)
         if h2 is None:
             return None
-        self._in_use[h2.id] = h2
-        logger.info("新建实例并入 in_use: service_id=%s gen=%s 当前总数=%s", h2.id, h2.generation, self._total_services())
+        self._in_use.setdefault(target_template_id, {})[h2.id] = h2
+        logger.info(
+            "新建实例并入 in_use: service_id=%s template_id=%s 当前该组总数=%s",
+            h2.id, target_template_id, self._total_services_by_template(target_template_id)
+        )
         return h2
 
     async def _fail(
@@ -703,7 +969,7 @@ class ServiceManager(IServiceManager):
     def mark_deprecated(self) -> None:
         """标记当前 ServiceManager 为待老化状态。"""
         self._deprecated = True
-        logger.info("ServiceManager 已标记为待老化状态: generation=%s", self._generation)
+        logger.info("ServiceManager 已标记为待老化状态")
 
     def is_deprecated(self) -> bool:
         """检查当前 ServiceManager 是否处于待老化状态。"""
@@ -723,15 +989,25 @@ class ServiceManager(IServiceManager):
         active_tasks = [t for t in self._user_route_tasks if not t.done()]
         inflight_count = len(active_tasks)
         
-        # 检查 in_use 和 idle 中的 session 数
-        in_use_sessions = sum(h.active_session_count for h in self._in_use.values())
-        idle_sessions = sum(h.active_session_count for h in self._idle.values())
+        # 检查 in_use 和 idle 中的 session 数（遍历所有模板组）
+        in_use_sessions = 0
+        idle_sessions = 0
+        in_use_count = 0
+        idle_count = 0
+
+        for pool in self._in_use.values():
+            in_use_count += len(pool)
+            in_use_sessions += sum(h.active_session_count for h in pool.values())
+
+        for pool in self._idle.values():
+            idle_count += len(pool)
+            idle_sessions += sum(h.active_session_count for h in pool.values())
         
         # 如果没有在途任务且没有活跃 session，则可以清理
         if inflight_count == 0 and in_use_sessions == 0 and idle_sessions == 0:
             logger.info(
                 "老化 ServiceManager 任务已全部完成，准备清理: in_use=%s idle=%s",
-                len(self._in_use), len(self._idle),
+                in_use_count, idle_count,
             )
             try:
                 await self.stop()

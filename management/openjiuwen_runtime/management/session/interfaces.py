@@ -256,6 +256,15 @@ class IServiceManager(ABC):
         pass
 
     @abstractmethod
+    async def load_template_config(self) -> list[Dict[str, Any]]:
+        """加载服务模板配置。
+
+        Returns:
+            服务模板配置列表，每个元素包含 template_id、min_idle、max_services 等配置。
+            如果返回空列表，则使用全局默认配置。
+        """
+
+    @abstractmethod
     async def start(self) -> None:
         pass
 
@@ -272,9 +281,8 @@ class IServiceManager(ABC):
         """投递内部高优先级消息（如缩容、运维事件）。"""
 
     @abstractmethod
-    async def update_config(self, **kwargs) -> None:
-        """运行时更新调度参数并递增代际。"""
-
+    def mark_deprecated(self) -> None:
+        """标记当前 ServiceManager 为待老化状态。调用 update_config 时自动调用。"""
 
     @abstractmethod
     def is_deprecated(self) -> bool:

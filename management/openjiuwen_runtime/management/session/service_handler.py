@@ -42,14 +42,12 @@ class ServiceHandler(IServiceHandler):
             message_channel: IServiceMessageChannel,
             response_parser: IResponseParser,
             deploy_controller: Optional[IDeployController] = None,
-            generation: int = 0,
             service_template: Optional[Dict[str, Any]] = None,
     ) -> None:
         if total_concurrency <= 0:
             raise ValueError("total_concurrency must be positive")
         self._id = service_id or str(uuid.uuid4())
         self._total = total_concurrency
-        self._generation = generation
         # 从 service_template 中提取 service_ttl（可能为 None，表示使用默认值）
         self._service_ttl: Optional[int] = self._extract_service_ttl_from_template(service_template)
         # session_id -> 已预留的服务级额度（等于该 session 声明的 session_concurrency）
@@ -122,14 +120,6 @@ class ServiceHandler(IServiceHandler):
             return False
         self._session_reserved[session_id] = need
         return True
-
-    @property
-    def generation(self) -> int:
-        return self._generation
-
-    @generation.setter
-    def generation(self, value: int) -> None:
-        self._generation = int(value)
 
     @property
     def active_session_count(self) -> int:
