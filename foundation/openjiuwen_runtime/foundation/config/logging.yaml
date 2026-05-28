@@ -17,6 +17,7 @@ handlers:
     class: openjiuwen_runtime.foundation.log.handler.CompressedRotatingFileHandler
     level: DEBUG
     formatter: standard
+    # 相对路径基于进程 cwd；可通过 OPENJIUWEN_RUNTIME_LOG_FILE / OPENJIUWEN_RUNTIME_LOG_DIR 覆盖
     filename: logs/deployment_service.log
     maxBytes: 10485760
     backupCount: 20
