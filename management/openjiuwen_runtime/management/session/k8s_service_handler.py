@@ -86,11 +86,18 @@ class ContainerSpec:
     run_as_user: Optional[int] = None
     run_as_group: Optional[int] = None
     allow_privilege_escalation: Optional[bool] = None
+    run_as_non_root: Optional[bool] = None
+
     # ---- 端口暴露 ----
     host_port: Optional[int] = None
     """对应 ``docker run -p HOST_PORT:CONTAINER_PORT``，在 K8s 中即 ``containerPort.hostPort``。"""
     # ---- hostPath 挂载（对应 ``docker run -v HOST:CTR``） ----
     host_path_mounts: List[HostPathMount] = field(default_factory=list)
+
+    cpu_request: Optional[str] = None
+    memory_request: Optional[str] = None
+    cpu_limit: Optional[str] = None
+    memory_limit: Optional[str] = None
 
     def __post_init__(self) -> None:
         if not self.name:
@@ -142,10 +149,6 @@ class K8sServiceHandler:
             host_mount_path: Optional[str] = None,  # hostPath 容器内挂载路径
             mode: str = "product",  # 运行环境模式：支持 dev / product 两种值
             node_name: Optional[str] = None,  # 强制调度到指定节点
-            cpu_request: str = "500m",
-            memory_request: str = "1Gi",
-            cpu_limit: Optional[str] = None,
-            memory_limit: Optional[str] = None,
     ):
         if not containers:
             raise ValueError("containers must not be empty")
@@ -173,11 +176,6 @@ class K8sServiceHandler:
         self._host_mount_path = host_mount_path
         self._mode = mode
         self._node_name = node_name
-        self._cpu_request = cpu_request
-        self._memory_request = memory_request
-        self._cpu_limit = cpu_limit if cpu_limit is not None else cpu_request
-        self._memory_limit = memory_limit if memory_limit is not None else memory_request
-
         self._pod_name: Optional[str] = None
         self._config_loaded = False
 
@@ -215,8 +213,8 @@ class K8sServiceHandler:
         suffix = f"-{idx}-{mount_idx}"
         return f"hp-{base[: 63 - len('hp-') - len(suffix)]}{suffix}"
 
-    @staticmethod
-    def _build_security_context(spec: ContainerSpec) -> Optional[client.V1SecurityContext]:
+    @classmethod
+    def _build_security_context(cls, spec: ContainerSpec) -> Optional[client.V1SecurityContext]:
         capabilities = None
         if spec.capabilities_add or spec.capabilities_drop:
             capabilities = client.V1Capabilities(
@@ -236,10 +234,33 @@ class K8sServiceHandler:
             "run_as_user": spec.run_as_user,
             "run_as_group": spec.run_as_group,
             "allow_privilege_escalation": spec.allow_privilege_escalation,
+            "run_as_non_root": spec.run_as_non_root,
         }
         if all(value is None or value is False for value in fields.values()):
             return None
         return client.V1SecurityContext(**fields)
+
+    @classmethod
+    def _build_container_resources(cls, spec: ContainerSpec) -> Optional[client.V1ResourceRequirements]:
+        requests = {}
+        if spec.cpu_request:
+            requests["cpu"] = spec.cpu_request
+        if spec.memory_request:
+            requests["memory"] = spec.memory_request
+
+        limits = {}
+        if spec.cpu_limit:
+            limits["cpu"] = spec.cpu_limit
+        if spec.memory_limit:
+            limits["memory"] = spec.memory_limit
+
+        if not requests and not limits:
+            return None
+
+        return client.V1ResourceRequirements(
+            requests=requests or None,
+            limits=limits or None
+        )
 
     def _generate_pod_name(self) -> str:
         return f"{self._name_prefix}-{self._random_suffix(10)}-{self._random_suffix(5)}"
@@ -314,17 +335,7 @@ class K8sServiceHandler:
                 annotations[
                     f"container.apparmor.security.beta.kubernetes.io/{spec.name}"
                 ] = "unconfined"
-
-            container_resources = client.V1ResourceRequirements(
-                requests={
-                    "cpu": self._cpu_request,
-                    "memory": self._memory_request,
-                },
-                limits={
-                    "cpu": self._cpu_limit,
-                    "memory": self._memory_limit,
-                },
-            )
+ 
             pod_containers.append(
                 client.V1Container(
                     name=spec.name,
@@ -339,7 +350,7 @@ class K8sServiceHandler:
                     ],
                     env=env_list or None,
                     volume_mounts=container_volume_mounts or None,
-                    resources=container_resources,
+                    resources=self._build_container_resources(spec),
                     security_context=self._build_security_context(spec),
                     readiness_probe=client.V1Probe(
                         tcp_socket=client.V1TCPSocketAction(port=spec.port),
@@ -349,7 +360,11 @@ class K8sServiceHandler:
                 )
             )
 
-
+        pod_security_context = None
+        if self._mode == "dev":
+            pod_security_context = client.V1PodSecurityContext(
+                fs_group=0
+            )
         return client.V1Pod(
             api_version="v1",
             kind="Pod",
@@ -364,6 +379,7 @@ class K8sServiceHandler:
                 restart_policy=self._restart_policy,
                 volumes=volumes or None,
                 node_name=self._node_name if self._mode == "dev" else None,
+                security_context=pod_security_context,
             ),
         )
 
