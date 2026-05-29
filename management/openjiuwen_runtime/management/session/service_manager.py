@@ -174,7 +174,6 @@ class ServiceManager(IServiceManager):
             await self._timer.stop_all()
         except Exception as e:  # noqa: BLE001
             logger.debug("Timer.stop_all: %s", e)
-        n_release = 0
         all_handlers: list[IServiceHandler] = []
         async with self._lock:
             # 遍历所有模板组的实例
@@ -184,10 +183,11 @@ class ServiceManager(IServiceManager):
                 all_handlers.extend(pool.values())
             self._in_use.clear()
             self._idle.clear()
-        n_release = len(all_handlers)
+        n_release = 0
         for h in all_handlers:
             try:
                 await h.delete()
+                n_release += 1
             except Exception as e:  # noqa: BLE001
                 logger.error(
                     "停服时 delete 服务实例失败: service_id=%s err=%s", h.id, e, exc_info=True
@@ -196,7 +196,7 @@ class ServiceManager(IServiceManager):
             await self._service_router.clear()
         except Exception as e:  # noqa: BLE001
             logger.error("ServiceRouter clear 失败: %s", e, exc_info=True)
-        logger.info("ServiceManager 已完全停止, 已释放 %s 个服务实例", n_release)
+        logger.info("ServiceManager 已完全停止, 已成功释放 %s 个服务实例 (总计尝试 %s 个)", n_release, len(all_handlers))
 
     async def handle_message(self, msg: SessionRequestWrapper) -> None:
         sreq = msg.session_request
@@ -501,23 +501,43 @@ class ServiceManager(IServiceManager):
                 sreq.request_id,
             )
             await h.handle_message(w)
+            logger.debug(
+                "已完成消息处理: service_id=%s session_id=%s request_id=%s",
+                h.id,
+                session_id,
+                sreq.request_id,
+            )
         except asyncio.CancelledError:
             logger.error("session_id=%s 被中断执行", session_id)
             await self._fail(w, 100003, session_id=session_id)
         except Exception as e:  # noqa: BLE001
             logger.error("路由/处理过程异常, session_id=%s: %s", session_id, e, exc_info=True)
             await self._fail(w, 100002, session_id=session_id)
-        else:
+        finally:
             # 请求结束: 按 session_ttl 维持映射；ttl<=0 视为「不保留」立即标记 pending 等待 flush
-            if sreq.session_ttl > 0:
-                try:
-                    await self._arm_session_timer(session_id, sreq.session_ttl)
-                except Exception as e2:  # noqa: BLE001
-                    logger.error("arm session 计时器失败: %s", e2, exc_info=True)
-            elif h is not None:
-                self._pending_expired_sessions[session_id] = h.id
-                # 由 _complete 钩子触发 flush；此处主动尝试一次以应对 _complete 已先于本行返回
-                await self._flush_pending_expired_for_service(h.id)
+            # 使用 finally 确保无论成功或失败都能正确清理 session
+            if h is not None:
+                if sreq.session_ttl > 0:
+                    try:
+                        await self._arm_session_timer(session_id, sreq.session_ttl)
+                    except Exception as e2:  # noqa: BLE001
+                        logger.error("arm session 计时器失败: %s", e2, exc_info=True)
+                    else:
+                        logger.debug(
+                            "ServiceManager session active: session_id=%s ttl=%s service_id=%s",
+                            session_id,
+                            sreq.session_ttl,
+                            h.id,
+                        )
+                else:
+                    self._pending_expired_sessions[session_id] = h.id
+                    logger.debug(
+                        "ServiceManager session ttl<=0 pending expired: session_id=%s service_id=%s",
+                        session_id,
+                        h.id,
+                    )
+                    # 由 _complete 钩子触发 flush；此处主动尝试一次以应对 _complete 已先于本行返回
+                    await self._flush_pending_expired_for_service(h.id)
 
     async def _arm_session_timer(self, session_id: str, ttl: int) -> None:
         if ttl <= 0:
@@ -542,7 +562,10 @@ class ServiceManager(IServiceManager):
             stored = await self._service_router.get_session_service(session_id)
             if not stored:
                 return
-            h = self._in_use.get(stored) or self._idle.get(stored)
+            
+            # 在所有模板组中查找该 service_id
+            h: Optional[IServiceHandler] = self._find_service_handler(stored)
+            
             if h is None:
                 await self._service_router.delete_session_service(session_id)
                 return
@@ -570,20 +593,30 @@ class ServiceManager(IServiceManager):
         if removed and target_svc:
             await self._flush_pending_expired_for_service(target_svc)
 
+    def _find_service_handler(self, service_id: str) -> Optional[IServiceHandler]:
+        """在所有模板组的 in_use 和 idle 池中查找指定的 service_id。
+
+        Args:
+            service_id: 要查找的服务实例 ID。
+
+        Returns:
+            找到的 IServiceHandler 实例，如果未找到则返回 None。
+        """
+        # 先在 in_use 池中查找
+        for pool in self._in_use.values():
+            if service_id in pool:
+                return pool[service_id]
+        
+        # 再在 idle 池中查找
+        for pool in self._idle.values():
+            if service_id in pool:
+                return pool[service_id]
+        
+        return None
+
     async def _flush_pending_expired_for_service(self, service_id: str) -> None:
         """清理 service 上所有「到期但仍 inflight」的 session；若清理后 sessions=0 且 inflight=0, arm service_ttl。"""
-        h: Optional[IServiceHandler] = None
-        # 在所有模板组中查找该 service_id
-        async with self._lock:
-            for pool in self._in_use.values():
-                if service_id in pool:
-                    h = pool[service_id]
-                    break
-            if h is None:
-                for pool in self._idle.values():
-                    if service_id in pool:
-                        h = pool[service_id]
-                        break
+        h: Optional[IServiceHandler] = self._find_service_handler(service_id)
 
         if h is None:
             return
@@ -631,13 +664,7 @@ class ServiceManager(IServiceManager):
 
     async def _arm_in_use_to_idle_pool(self, service_id: str) -> None:
         """in_use 实例的所有 session 均已归还且无 in-flight: 等待 service_ttl 后转入 _idle。"""
-        h: Optional[IServiceHandler] = None
-        # 在所有模板组的 in_use 池中查找
-        async with self._lock:
-            for pool in self._in_use.values():
-                if service_id in pool:
-                    h = pool[service_id]
-                    break
+        h: Optional[IServiceHandler] = self._find_service_handler(service_id)
 
         if h is None:
             return
