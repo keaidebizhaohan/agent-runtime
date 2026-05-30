@@ -72,6 +72,8 @@ class ServiceManager(IServiceManager):
         # session_ttl 已到期但当时该 session 仍有 inflight, 待 _complete/新消息后清理
         # 形如 {session_id: service_id}; 接到新消息会自动清掉, _complete 钩子会触发 flush
         self._pending_expired_sessions: dict[str, str] = {}
+        # deploy 进行中、尚未入 _idle/_in_use 的实例（stop 时必须一并 delete）
+        self._deploying: set[IServiceHandler] = set()
         self._stop_completed: bool = False
         # 老化标记：当调用 update_config 时设置为 True，表示此 ServiceManager 待老化
         self._deprecated: bool = False
@@ -181,8 +183,15 @@ class ServiceManager(IServiceManager):
                 all_handlers.extend(pool.values())
             for pool in self._idle.values():
                 all_handlers.extend(pool.values())
+            if self._deploying:
+                logger.info(
+                    "ServiceManager stop: 另有 %s 个 deploy 进行中的实例待清理",
+                    len(self._deploying),
+                )
+                all_handlers.extend(self._deploying)
             self._in_use.clear()
             self._idle.clear()
+            self._deploying.clear()
         n_release = 0
         for h in all_handlers:
             try:
@@ -425,6 +434,14 @@ class ServiceManager(IServiceManager):
                     )
         # 新入 idle 的实例不启动 service_ttl 删 Pod；仅 min_idle 维持数量
 
+    async def _safe_delete_handler(self, h: IServiceHandler) -> None:
+        try:
+            await h.delete()
+        except Exception as e:  # noqa: BLE001
+            logger.error(
+                "清理服务实例失败: service_id=%s err=%s", h.id, e, exc_info=True
+            )
+
     async def _new_deployed(
         self, service_template: Optional[Dict[str, Any]] = None
     ) -> Optional[IServiceHandler]:
@@ -436,11 +453,19 @@ class ServiceManager(IServiceManager):
             logger.error("创建服务实例失败 (factory): %s", e, exc_info=True)
             return None
         h.set_idle_pool_transition_hook(self._on_in_use_may_move_to_idle_pool)
+        self._deploying.add(h)
         try:
             await h.deploy()
+        except asyncio.CancelledError:
+            logger.warning("服务 deploy 被取消: service_id=%s, 正在清理", h.id)
+            await self._safe_delete_handler(h)
+            raise
         except Exception as e:  # noqa: BLE001
             logger.error("服务 deploy 失败: %s", e, exc_info=True)
+            await self._safe_delete_handler(h)
             return None
+        finally:
+            self._deploying.discard(h)
         logger.debug("新服务 deploy 成功, 待加入池: service_id=%s", h.id)
         return h
 
