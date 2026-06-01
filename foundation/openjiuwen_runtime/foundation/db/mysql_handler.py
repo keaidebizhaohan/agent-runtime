@@ -29,11 +29,11 @@ class MySQLHandler(SQLAlchemyHandler):
         user: Optional[str] = None,
         password: Optional[str] = None,
     ) -> None:
-        self.host = host if host is not None else settings.DB_HOST
-        self.port = port if port is not None else settings.DB_PORT
-        self.database = database if database is not None else settings.DB_NAME
-        self.user = user if user is not None else settings.DB_USER
-        self.password = password if password is not None else settings.DB_PASSWORD
+        self.host = host if host is not None else settings.RUNTIME_DB_HOST
+        self.port = port if port is not None else settings.RUNTIME_DB_PORT
+        self.database = database if database is not None else settings.RUNTIME_DB_NAME
+        self.user = user if user is not None else settings.RUNTIME_DB_USER
+        self.password = password if password is not None else settings.RUNTIME_DB_PASSWORD
 
         database_url = (
             f"mysql+aiomysql://{quote_plus(self.user or '')}:{quote_plus(self.password or '')}"
