@@ -1,4 +1,4 @@
-# coding: utf-8
+﻿# coding: utf-8
 # Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved
 
 """服务管理：双 asyncio 队列（系统优先）、按 session 预留服务并发、亲和、起停与缩容。"""
@@ -796,7 +796,7 @@ class ServiceManager(IServiceManager):
                     continue
 
                 # 在该组中找到一个未被 arm 的候选实例
-                for sid in reversed(list(idle_pool.keys())):
+                for sid in idle_pool.keys():
                     if sid not in self._excess_idle_timer_armed:
                         candidate = sid
                         candidate_h = idle_pool.get(sid)
