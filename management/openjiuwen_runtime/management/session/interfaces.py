@@ -185,6 +185,7 @@ class IAccess(ABC):
             strategy: ISessionStrategy,
             config: "AccessConfig",
             session_config: "SessionConfig",
+            service_configs: Optional[list[dict[str, Any]]] = None,
     ) -> None:
         pass
 

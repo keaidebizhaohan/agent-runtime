@@ -82,7 +82,7 @@ flowchart TB
 
 | 接口 | 方法 | 含义 |
 |------|------|------|
-| `IAccess` | `init(...)` / `send_message(IRequest) -> AsyncIterator` | 初始化并 `start` 服务管理；流式产出来自下游的解析后结果。 |
+| `IAccess` | `init(...)` / `send_message(IRequest) -> AsyncIterator` / `cleanup_all_pods(namespace, ...)` | 初始化并 `start` 服务管理；流式产出来自下游的解析后结果；主备切换时按 K8s label 清理 Pod。 |
 | `IServiceManager` | `init` / `start` / `stop` / `handle_message` / `enqueue_system` | 对 wrapper 入用户队列；系统事件入系统队列。 |
 | `IServiceHandler` | `handle_message` / `deploy` / `delete` / `remove_session` / 并发与 session 只读属性 | 单实例生命周期与消息处理。 |
 | `IServiceMessageChannel` | `send(service_id, wrapper, *, response_parser, on_request_complete)` | **上行**一帧 + **下行**在独立接收循环中 `dispatch` + 完成时 `await on_request_complete(rid)`。 |
@@ -110,14 +110,14 @@ flowchart TB
 
 | 文件 | 功能 |
 |------|------|
-| `access.py` | `Access`：策略生成 `ISessionRequest`、自动补 `request_id`（多路复用必须）、`handle_message` 入队、从 `response_queue` 流式 `yield`；`init` 时拉 `ServiceManager.start()`。 |
+| `access.py` | `Access`：策略生成 `ISessionRequest`、自动补 `request_id`（多路复用必须）、`handle_message` 入队、从 `response_queue` 流式 `yield`；`init` 时拉 `ServiceManager.start()`；`cleanup_all_pods(namespace, kubeconfig, label_selector)` 直接调 `K8sServiceHandler` 按 label 清理 Pod（主备切换用）。 |
 | `service_manager.py` | 双队列消费循环、用户消息独立 task 路由、`_pick_or_create` 亲和/选实例/新 deploy、`_bootstrap_min_idle`、autoscale、session 与 service 空闲计时器、`_fail` 写错误。 |
 | `service_handler.py` | `ServiceHandler`：`deploy`→`on_pod_ready`、`invoke_channel`→`channel.send`、`dispatch_inbound_chunk` 按 `request_id` 写回、`delete` 先关通道再删资源。 |
 | `session_handler.py` | `SessionHandler`：会话内 `BoundedSemaphore` + `invoke_channel`。 |
 | `dual_queue.py` | 系统优先的 `get()`：先 `drain` 系统队列，再与阻塞用户队列用 `asyncio.wait(FIRST_COMPLETED)`。 |
 | `router.py` | `ServiceRouter`：`session_id -> service_id`；`SessionRouter`：`request_id -> session_id`（在 ServiceHandler 上用于下行匹配）。 |
 | `ws_client_channel.py` | `WSServiceMessageChannel`：`serialize_request_payload` / `wire_dict` 上行业务、`_ensure_connected`、`on_pod_ready` 中预建链、`send` 内等待 `is_completed` 与 `cancel`、`close`。 |
-| `k8s_service_handler.py` | `K8sServiceHandler` 创建/等待 Pod Ready、`K8sDeployController` 适配 `IDeployController`、`PodDeployInfo`。 |
+| `k8s_service_handler.py` | `K8sServiceHandler` 创建/等待 Pod Ready、`cleanup_all_agentserver_pods` 按 label 批量删 Pod；`K8sDeployController` 适配 `IDeployController`、`PodDeployInfo`。 |
 | `docker_service_handler.py` | Docker 侧部署信息与实现（如存在）。 |
 | `runtime.py` | `IDeployController` 协议、`NoOpDeployController` 不调真实部署。 |
 | `strategies/_base.py` + `per_chat_bot.py` | `BaseSessionStrategy`：`PerChatBotStrategy` 以 `f"{chat_id}::{bot_id}"` 为 session 键。 |
@@ -196,7 +196,37 @@ sequenceDiagram
 
 ---
 
-## 6. 设计取舍与扩展点
+## 6. 主备切换与 Pod 清理
+
+Gateway 部署为 K8s **主备模式**（LeaderElection），主备切换时需清理旧 PRIMARY 遗留的 AgentServer Pod。
+
+**调用链**：
+
+```
+app_gateway._session_on_role_change(PRIMARY)
+  → RuntimeManagementAgentClient.cleanup_all_pods()
+    → Access.cleanup_all_pods(namespace, kubeconfig, label_selector)
+      → K8sServiceHandler.cleanup_all_agentserver_pods()
+```
+
+**标签设计**：
+
+| Pod 类型 | 标签 | 说明 |
+|----------|------|------|
+| AgentServer | `jiuwenclaw-component=agentserver` | 由 `RuntimeManagementAgentClient` 通过 `extra_labels` 传入 K8sServiceHandler，在 Pod 创建时打上 |
+| Gateway | `jiuwenclaw-component=gateway` | 在 K8s YAML 中配置，不在代码中管理 |
+
+**流程**：
+
+1. STANDBY 升为 PRIMARY 时，LeaderElection 回调触发 `cleanup_all_pods`。
+2. `cleanup_all_pods` 通过 K8s label selector 批量删除所有 `jiuwenclaw-component=agentserver` Pod（不依赖内存池状态——STANDBY 的池为空）。
+3. 清理完成后，`ServiceManager` 的 autoscale 机制自动重建 `min_idle` 数量的新 Pod。
+
+**为什么不在 ServiceManager 内实现**：`cleanup_all_pods` 不操作 ServiceManager 的内存状态（STANDBY 的 `in_use`/`idle` 池为空），只做 K8s API 调用，因此放在 Access 层直接调 `K8sServiceHandler` 的静态方法。
+
+---
+
+## 7. 设计取舍与扩展点
 
 | 点 | 说明 |
 |----|------|
@@ -204,10 +234,11 @@ sequenceDiagram
 | **通道** | 实现 `IServiceMessageChannel`：除 `send` 外可实现 `bind_handler` / `on_pod_ready` / `close` 以配合 `ServiceHandler`。 |
 | **部署** | 实现 `IDeployController` 即可接 VM、Nomad 等。 |
 | **存储** | `AccessConfig.db_handler` 预留，当前核心路径可不落库。 |
+| **热更新** | `Access.update_config()` 增加代际号，旧实例标记 deprecated 后自然回收，新请求路由到新一代实例。 |
 
 ---
 
-## 7. 与测试 / 可执行样例的对应关系
+## 8. 与测试 / 可执行样例的对应关系
 
 - 系统级 Mock：`tests/system_tests/management_session/test_session_sdk.py`（`NoOpDeploy` + 假通道）。
 - 真 K8s + WSS：`tests/system_tests/management_session/main_k8s_access.py`，用 `K8sServiceHandler` + `WSServiceMessageChannel` 跑通全链路；业务 JSON 可经由 `WireIRequest` 等 `IRequest` 实现上送。

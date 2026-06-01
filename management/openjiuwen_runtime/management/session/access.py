@@ -77,6 +77,7 @@ class Access(IAccess):
         self._strategy: Optional[ISessionStrategy] = None
         self._response_parser: Optional[IResponseParser] = None
         self._config: Optional[AccessConfig] = None
+        self._service_configs: Optional[list[dict[str, Any]]] = None
         self._shutdown_done: bool = False
 
     async def init(
@@ -85,10 +86,12 @@ class Access(IAccess):
             config: AccessConfig,
             session_config: SessionConfig,
             strategy: ISessionStrategy = None,
+            service_configs: Optional[list[dict[str, Any]]] = None,
     ) -> None:
         # 与入口共享的会话维度：并发与 TTL 写入策略，供 handle_session 填充 ISessionRequest
         self._response_parser = response_parser
         self._config = config
+        self._service_configs = service_configs
         if strategy:
             self._strategy = strategy
             self._strategy.configure(concurrency=session_config.concurrency, ttl=session_config.ttl)
