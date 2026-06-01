@@ -275,6 +275,7 @@ class SQLAlchemyHandler(DBHandler):
         filters: Optional[dict] = None,
         limit: int = 100,
         offset: int = 0,
+        order_by: Optional[list[tuple[str, bool]] | str] = None,
     ) -> list[Any]:
         logger.debug(
             "Listing records: table=%s, filters=%s, limit=%s, offset=%s",
@@ -293,6 +294,23 @@ class SQLAlchemyHandler(DBHandler):
             if filters:
                 for key, value in filters.items():
                     query = query.where(getattr(model, key) == value)
+            
+            # 处理排序
+            if order_by:
+                if isinstance(order_by, str):
+                    order_parts = order_by.split()
+                    field = order_parts[0].lstrip('-')
+                    is_desc = len(order_parts) > 1 and order_parts[1].upper() == "DESC"
+                    is_desc = is_desc or order_by.startswith('-')
+                    query = query.order_by(
+                        getattr(model, field).desc() if is_desc else getattr(model, field)
+                    )
+                elif isinstance(order_by, list):
+                    for field, is_desc in order_by:
+                        query = query.order_by(
+                            getattr(model, field).desc() if is_desc else getattr(model, field)
+                        )
+            
             query = query.offset(offset).limit(limit)
             result = await session.execute(query)
             records = list(result.scalars().all())
