@@ -5,7 +5,7 @@
 
 import asyncio
 import uuid
-from typing import Any, AsyncIterator, Callable, List, Optional
+from typing import Any, AsyncIterator, Awaitable, Callable, List, Optional
 
 from openjiuwen_runtime.foundation.log import get_logger
 
@@ -22,8 +22,8 @@ from .models import AccessConfig, SessionConfig
 logger = get_logger(__name__)
 
 
-# 用于创建 ServiceManager 的工厂函数类型
-ServiceManagerFactory = Callable[[], IServiceManager]
+# 用于创建 ServiceManager 的工厂函数类型（异步）
+ServiceManagerFactory = Callable[[], Awaitable[IServiceManager]]
 
 
 class _AutoIdRequest(IRequest):
@@ -95,8 +95,8 @@ class Access(IAccess):
         if strategy:
             self._strategy = strategy
             self._strategy.configure(concurrency=session_config.concurrency, ttl=session_config.ttl)
-        # 通过工厂函数创建 ServiceManager
-        self._service_manager = self._service_manager_factory()
+        # 通过工厂函数创建 ServiceManager（异步）
+        self._service_manager = await self._service_manager_factory()
         await self._service_manager.init(response_parser)
         await self._service_manager.start()
         logger.info(
@@ -158,8 +158,8 @@ class Access(IAccess):
             self._service_manager.mark_deprecated()
             logger.info("当前 ServiceManager 已标记为待老化")
 
-        # 创建新的 ServiceManager
-        new_sm = self._service_manager_factory()
+        # 创建新的 ServiceManager（异步）
+        new_sm = await self._service_manager_factory()
         # 初始化并启动新 ServiceManager
         await new_sm.init(self._response_parser)
         await new_sm.start()

@@ -42,6 +42,7 @@ class ServiceManager(IServiceManager):
         max_services: int = 10,
         autoscale_interval: float = 0.5,
         service_idle_ttl: int = 300,
+        service_templates: list[Dict[str, Any]] | None = None,
     ) -> None:
         self._factory = service_factory
         self._q = dual_queue
@@ -59,7 +60,7 @@ class ServiceManager(IServiceManager):
         self._in_use: dict[Optional[str], dict[str, IServiceHandler]] = {}
         self._idle: dict[Optional[str], dict[str, IServiceHandler]] = {}
         # 服务模板配置列表: [{template_id, min_idle, max_services, ...}]
-        self._service_templates: list[Dict[str, Any]] = []
+        self._service_templates: list[Dict[str, Any]] = service_templates or []
         self._service_router = ServiceRouter()
         self._running = False
         self._message_task: Optional[asyncio.Task[Any]] = None
@@ -89,29 +90,15 @@ class ServiceManager(IServiceManager):
             self._service_idle_ttl,
         )
 
-    async def load_template_config(self) -> list[Dict[str, Any]]:
-        """加载服务模板配置。子类可重写此方法以从外部加载配置。
-
-        Returns:
-            服务模板配置列表，每个元素包含 template_id、min_idle、max_services 等配置。
-            默认返回空列表，表示使用全局默认配置。
-        """
-        return []
-
     async def start(self) -> None:
         if self._running:
             logger.debug("ServiceManager start 被忽略: 已在运行中")
             return
         self._running = True
 
-        # 加载模板配置
-        service_templates = await self.load_template_config()
-
         async with self._lock:
-            self._service_templates = service_templates
-
             # 为所有 template_id 初始化池结构
-            for tpl in service_templates:
+            for tpl in self._service_templates:
                 template_id = tpl.get("template_id")
                 if template_id not in self._in_use:
                     self._in_use[template_id] = {}
@@ -124,11 +111,11 @@ class ServiceManager(IServiceManager):
             if None not in self._idle:
                 self._idle[None] = {}
 
-        if service_templates:
+        if self._service_templates:
             logger.info(
                 "ServiceManager 已加载模板配置: templates_count=%s template_ids=%s",
-                len(service_templates),
-                [tpl.get("template_id") for tpl in service_templates],
+                len(self._service_templates),
+                [tpl.get("template_id") for tpl in self._service_templates],
             )
         else:
             logger.info("ServiceManager 使用默认配置（无模板配置）")
@@ -254,6 +241,24 @@ class ServiceManager(IServiceManager):
                     return min_idle_val
 
         return self._min_idle
+
+    def _get_template_config(self, template_id: Optional[str]) -> Optional[Dict[str, Any]]:
+        """获取指定 template_id 的完整模板配置。
+
+        Args:
+            template_id: 模板 ID，None 表示默认配置。
+
+        Returns:
+            匹配的模板配置字典，如果未找到则返回 None。
+        """
+        if not self._service_templates:
+            return None
+
+        for tpl in self._service_templates:
+            if tpl.get("template_id") == template_id:
+                return tpl
+
+        return None
 
     def _get_template_max_services(self, template_id: Optional[str]) -> int:
         """获取指定 template_id 的最大服务实例数配置。
@@ -492,7 +497,7 @@ class ServiceManager(IServiceManager):
                                 session_id, sreq.session_concurrency
                         ):
                             logger.warning(
-                                "服务额度预留失败(与 pick 不一致): session_id=%s service_id=%s "
+                                "服务额度预留失败(资源不足): session_id=%s service_id=%s "
                                 "need=%s avail=%s",
                                 session_id,
                                 h.id,
@@ -976,7 +981,10 @@ class ServiceManager(IServiceManager):
                 return h
 
         # 3) 未找到匹配实例，在该 template_id 组的 max 允许下新 deploy
+        # 从 _service_templates 中查询获取完整的模板配置
+        template_config = self._get_template_config(target_template_id)
         max_services_for_tpl = self._get_template_max_services(target_template_id)
+        
         if self._total_services_by_template(target_template_id) >= max_services_for_tpl:
             logger.debug(
                 "pick: 未选到可用实例且 template_id=%s 已达 max_services=%s, 当前该组实例=%s",
@@ -985,7 +993,9 @@ class ServiceManager(IServiceManager):
             )
             return None
 
-        h2 = await self._new_deployed(sreq.service_template)
+        # 使用查询到的模板配置进行部署（如果存在）
+        deploy_template = template_config if template_config else sreq.service_template
+        h2 = await self._new_deployed(deploy_template)
         if h2 is None:
             return None
         self._in_use.setdefault(target_template_id, {})[h2.id] = h2

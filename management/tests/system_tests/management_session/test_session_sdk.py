@@ -153,7 +153,7 @@ async def _build_access(
     factory, k8s_list = make_factory(ch, service_concurrency, k8s_per_service)
     dq: PriorityDualAsyncQueues[QueueItem] = PriorityDualAsyncQueues(100, 1000)
     
-    def create_sm() -> ServiceManager:
+    async def create_sm() -> ServiceManager:
         return ServiceManager(
             service_factory=factory,
             dual_queue=dq,

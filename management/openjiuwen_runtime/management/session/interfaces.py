@@ -257,15 +257,6 @@ class IServiceManager(ABC):
         pass
 
     @abstractmethod
-    async def load_template_config(self) -> list[Dict[str, Any]]:
-        """加载服务模板配置。
-
-        Returns:
-            服务模板配置列表，每个元素包含 template_id、min_idle、max_services 等配置。
-            如果返回空列表，则使用全局默认配置。
-        """
-
-    @abstractmethod
     async def start(self) -> None:
         pass
 

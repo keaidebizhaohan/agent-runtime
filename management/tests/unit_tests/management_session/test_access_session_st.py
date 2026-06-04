@@ -172,7 +172,7 @@ async def _stack(
     f = _Factory(ch, scap, dlist)
     dq: PriorityDualAsyncQueues[QueueItem] = PriorityDualAsyncQueues(100, 1000)
     
-    def create_sm() -> ServiceManager:
+    async def create_sm() -> ServiceManager:
         return ServiceManager(
             f,
             dq,
@@ -210,7 +210,7 @@ async def _stack_holding(
     f = _Factory(ch, scap, dlist)
     dq: PriorityDualAsyncQueues[QueueItem] = PriorityDualAsyncQueues(100, 1000)
     
-    def create_sm() -> ServiceManager:
+    async def create_sm() -> ServiceManager:
         return ServiceManager(
             f,
             dq,

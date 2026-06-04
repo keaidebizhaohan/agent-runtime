@@ -400,7 +400,7 @@ async def _amain() -> int:
         acc_cfg.user_queue_size, acc_cfg.system_queue_size
     )
     
-    def create_sm() -> ServiceManager:
+    async def create_sm() -> ServiceManager:
         return ServiceManager(
             service_factory=factory,
             dual_queue=dual_q,
