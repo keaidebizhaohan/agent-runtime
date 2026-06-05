@@ -79,6 +79,12 @@ class PostgreSQLHandler(SQLAlchemyHandler):
         finally:
             await temp_engine.dispose()
 
+    def _get_sqlalchemy_type(self, data_type: str, length: Optional[int] = None):
+        """PostgreSQL 方言类型映射：datetime 使用 TIMESTAMP WITH TIME ZONE。"""
+        if data_type.lower() == "datetime":
+            return DateTime(timezone=True)
+        return super()._get_sqlalchemy_type(data_type, length)
+
     def _get_column_sql_type(self, col_def: ColumnDefinition) -> str:
         """PostgreSQL 方言类型映射。
 
@@ -86,5 +92,5 @@ class PostgreSQLHandler(SQLAlchemyHandler):
         此方法仅在 ALTER TABLE ADD COLUMN（增量同步缺失列）时调用。
         """
         if col_def.data_type.lower() == "datetime":
-            return "TIMESTAMP"
+            return "TIMESTAMP WITH TIME ZONE"
         return super()._get_column_sql_type(col_def)
