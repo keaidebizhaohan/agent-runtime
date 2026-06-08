@@ -78,7 +78,10 @@ def setup_logging() -> None:
             os.makedirs(log_dir, exist_ok=True)
         log_file_path = settings.adapter_log_file
         base, ext = os.path.splitext(log_file_path)
-        log_file_with_pid = f"{base}_{os.getpid()}{ext}"
+        log_suffix = ""
+        if settings.adapter_fastapi_workers and settings.adapter_fastapi_workers > 1:
+            log_suffix = f"_{os.getpid()}"
+        log_file_with_pid = f"{base}{log_suffix}{ext}"
         logger.add(
             log_file_with_pid,
             level=settings.adapter_log_level.upper() if settings.adapter_log_level else "INFO",
@@ -115,11 +118,13 @@ async def lifespan(fastapi_app: FastAPI):
         f"{sorted(settings.versatile_headers_template.keys())}"
     )
 
+    task_store = InMemoryTaskStore()
+
     executor = VersatileAdapterExecutor(
         versatile_proxy=versatile_proxy,
+        task_store=task_store,
     )
 
-    task_store = InMemoryTaskStore()
     request_handler = DefaultRequestHandler(
         agent_executor=executor,
         task_store=task_store,

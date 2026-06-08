@@ -102,10 +102,13 @@ def setup_logging() -> None:
         log_dir = settings.log_dir
         if log_dir:
             os.makedirs(log_dir, exist_ok=True)
-        log_file_with_pid = f"{log_dir}{os.sep}/process_{os.getpid()}.log"
-        audit_log = f"{log_dir}{os.sep}/audit_{os.getpid()}.log"
+        log_suffix = ""
+        if settings.fastapi_workers and settings.fastapi_workers > 1:
+            log_suffix = f"_{os.getpid()}"
+        log_file = os.path.join(log_dir, f'process{log_suffix}.log')
+        audit_log = os.path.join(log_dir, f'audit{log_suffix}.log')
         logger.add(
-            log_file_with_pid,
+            log_file,
             level=settings.log_level.upper() if settings.log_level else "INFO",
             rotation="20 MB",
             retention="7 days",
@@ -395,7 +398,9 @@ async def lifespan(fastapi_app: FastAPI):
         await initialize()
         logger.info("[A2AService] Agent 初始化完成")
 
-        http_client = httpx.AsyncClient()
+        http_client = httpx.AsyncClient(
+            timeout=httpx.Timeout(settings.versatile_adapter_timeout, read=None)
+        )
         va_card = _build_va_card(settings.versatile_adapter_url)
         factory = ClientFactory(ClientConfig(httpx_client=http_client))
         va_client = factory.create(va_card)
