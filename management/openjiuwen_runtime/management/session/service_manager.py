@@ -195,6 +195,12 @@ class ServiceManager(IServiceManager):
         logger.info("ServiceManager 已完全停止, 已成功释放 %s 个服务实例 (总计尝试 %s 个)", n_release, len(all_handlers))
 
     async def handle_message(self, msg: SessionRequestWrapper) -> None:
+        if self._deprecated:
+            logger.warning(
+                "ServiceManager 已标记为待老化，但仍收到新消息: session_id=%s request_id=%s",
+                msg.session_request.session_id,
+                msg.session_request.request_id,
+            )
         sreq = msg.session_request
         raw = RawMessage(
             MessageType.USER_REQUEST, msg, priority=sreq.priority
@@ -481,6 +487,14 @@ class ServiceManager(IServiceManager):
             return
         sreq = w.session_request
         session_id = sreq.session_id
+        
+        if self._deprecated:
+            logger.warning(
+                "待老化的 ServiceManager 正在处理新请求: session_id=%s request_id=%s",
+                session_id,
+                sreq.request_id,
+            )
+            
         # 新消息进入：先取消该 session 待生效的 session_ttl 计时与延期清理标记
         # 满足规则「session_ttl 之内有 session 的消息，则删除 session_ttl 定时器」
         await self._timer.cancel_timer(f"sess:{session_id}")
@@ -1038,7 +1052,11 @@ class ServiceManager(IServiceManager):
         return self._deprecated
 
     async def try_cleanup_if_idle(self) -> bool:
-        """尝试清理当前 ServiceManager（如果无在途任务和活跃 session）。
+        """尝试清理当前 ServiceManager（如果无在途任务和 inflight 请求）。
+        
+        对于已标记为 deprecated 的 ServiceManager，只要没有正在处理的请求
+        （inflight_requests == 0），即使存在 session 元数据也可以安全清理，
+        因为新请求都会路由到新的 ServiceManager。
         
         Returns:
             True 表示已清理成功，False 表示仍有活跃任务无法清理。
@@ -1049,26 +1067,27 @@ class ServiceManager(IServiceManager):
         
         # 检查是否有在途的用户路由任务
         active_tasks = [t for t in self._user_route_tasks if not t.done()]
-        inflight_count = len(active_tasks)
+        inflight_task_count = len(active_tasks)
         
-        # 检查 in_use 和 idle 中的 session 数（遍历所有模板组）
-        in_use_sessions = 0
-        idle_sessions = 0
+        # 检查所有 service handler 的总 inflight 请求数（遍历所有模板组）
+        total_inflight_requests = 0
         in_use_count = 0
         idle_count = 0
 
         for pool in self._in_use.values():
             in_use_count += len(pool)
-            in_use_sessions += sum(h.active_session_count for h in pool.values())
+            total_inflight_requests += sum(h.inflight_requests for h in pool.values())
 
         for pool in self._idle.values():
             idle_count += len(pool)
-            idle_sessions += sum(h.active_session_count for h in pool.values())
+            total_inflight_requests += sum(h.inflight_requests for h in pool.values())
         
-        # 如果没有在途任务且没有活跃 session，则可以清理
-        if inflight_count == 0 and in_use_sessions == 0 and idle_sessions == 0:
+        # 如果没有在途任务且没有 inflight 请求，则可以安全清理
+        # 注意：这里不检查 active_session_count，因为 session 只是元数据，
+        # 只要没有正在处理的请求就可以安全清理
+        if inflight_task_count == 0 and total_inflight_requests == 0:
             logger.info(
-                "老化 ServiceManager 任务已全部完成，准备清理: in_use=%s idle=%s",
+                "老化 ServiceManager 无在途任务和 inflight 请求，准备清理: in_use=%s idle=%s",
                 in_use_count, idle_count,
             )
             try:
@@ -1079,7 +1098,7 @@ class ServiceManager(IServiceManager):
                 return False
         else:
             logger.debug(
-                "老化 ServiceManager 仍有活跃任务，暂不清理: inflight=%s in_use_sessions=%s idle_sessions=%s",
-                inflight_count, in_use_sessions, idle_sessions,
+                "老化 ServiceManager 仍有活跃任务，暂不清理: inflight_tasks=%s total_inflight_requests=%s",
+                inflight_task_count, total_inflight_requests,
             )
             return False
