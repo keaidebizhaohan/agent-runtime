@@ -19,12 +19,14 @@ class SessionRequest(ISessionRequest):
         ttl: int,
         request_id: Optional[str],
         raw: IRequest,
+        service_template: Optional[dict] = None,
     ):
         self._session_id = session_id
         self._concurrency = concurrency
         self._ttl = ttl
         self._request_id = request_id
         self._raw = raw
+        self._service_template = service_template
 
     @property
     def session_id(self) -> str:
@@ -45,6 +47,10 @@ class SessionRequest(ISessionRequest):
     @property
     def raw_msg(self) -> Any:
         return self._raw
+
+    @property
+    def service_template(self) -> Optional[dict]:
+        return self._service_template
 
     @property
     def priority(self) -> "MessagePriority":
