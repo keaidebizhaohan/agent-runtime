@@ -18,6 +18,12 @@ from openjiuwen_runtime.foundation.log import get_logger
 
 logger = get_logger(__name__)
 
+# Pod 标签选择器常量（用于监控）
+POD_LABEL_KEY = "jiuwenclaw-component"
+POD_LABEL_VALUE = "agentserver"
+POD_LABEL_SELECTOR = f"{POD_LABEL_KEY}={POD_LABEL_VALUE}"
+GATEWAY_ID_LABEL_KEY = "jiuwenclaw-gateway-id"
+
 
 @dataclass(frozen=True)
 class PodDeployInfo:
@@ -37,6 +43,27 @@ class ContainerEndpoint:
     container_name: str
     port: int
     port_name: str
+
+
+@dataclass(frozen=True)
+class PodStatusInfo:
+    """Pod 状态信息（用于监控接口）。"""
+
+    pod_name: str  # Pod 名称
+    namespace: str  # 命名空间
+    status: str  # 归一化状态（Running/Pending/Failed/Terminated/CrashLoopBackOff 等）
+    phase: str  # K8s 原生 phase（Running/Pending/Failed/Succeeded/Unknown）
+    pod_ip: Optional[str]  # Pod IP
+    host_ip: Optional[str]  # 宿主机 IP
+    node_name: Optional[str]  # 节点名
+    reason: Optional[str]  # 异常原因（Waiting/Terminated 等状态的 reason）
+    message: Optional[str]  # 详细信息（Waiting/Terminated 等状态的 message）
+    restart_count: int  # 容器重启次数
+    deletion_timestamp: Optional[str]  # 删除时间戳（用于检测 Terminating 状态）
+
+    # 可选：metrics-server 数据
+    cpu_usage_cores: Optional[float] = None  # CPU 使用量（核数）
+    memory_usage_bytes: Optional[int] = None  # 内存使用量（字节）
 
 
 @dataclass(frozen=True)
@@ -601,6 +628,173 @@ class K8sServiceHandler:
         finally:
             await api_client.close()
         return deleted
+
+    @staticmethod
+    async def monitor_pods_status(
+        namespace: str,
+        label_selector: str = "",
+        kubeconfig: Optional[str] = None,
+        include_metrics: bool = False,
+    ) -> List[PodStatusInfo]:
+        """监测所有匹配的 Pod 状态。
+
+        Args:
+            namespace: K8s 命名空间
+            label_selector: Pod 标签选择器（如 "app=jiuwenclaw-agentserver"）
+            kubeconfig: 可选的 kubeconfig 路径
+            include_metrics: 是否包含 metrics-server 数据（CPU/Memory 使用率）
+
+        Returns:
+            Pod 状态信息列表，每个元素包含 pod_name、status、phase、reason、pod_ip 等
+        """
+        # 1. 加载 K8s 配置
+        try:
+            config.load_incluster_config()
+            logger.debug("K8s 已加载 in-cluster 配置（监控接口）")
+        except config.ConfigException:
+            if kubeconfig:
+                await config.load_kube_config(config_file=kubeconfig)
+                logger.debug("K8s 已加载 kubeconfig: %s（监控接口）", kubeconfig)
+            else:
+                await config.load_kube_config()
+                logger.debug("K8s 已加载默认 kubeconfig（监控接口）")
+
+        api_client = client.ApiClient()
+        try:
+            core = client.CoreV1Api(api_client)
+
+            # 2. 获取所有匹配的 Pod
+            pods = await core.list_namespaced_pod(
+                namespace=namespace,
+                label_selector=label_selector,
+            )
+
+            if not pods.items:
+                logger.debug("监控接口未找到匹配的 Pod: namespace=%s selector=%s", namespace, label_selector)
+                return []
+
+            logger.debug(
+                "监控接口查询到 Pod: namespace=%s selector=%s count=%s",
+                namespace, label_selector, len(pods.items)
+            )
+
+            # 3. 遍历 Pod，提取状态信息并归一化
+            pod_statuses: List[PodStatusInfo] = []
+            for pod in pods.items:
+                if not pod.metadata or not pod.metadata.name:
+                    continue
+
+                pod_name = pod.metadata.name
+                pod_namespace = pod.metadata.namespace or namespace
+                deletion_timestamp = None
+                if pod.metadata.deletion_timestamp:
+                    deletion_timestamp = pod.metadata.deletion_timestamp.isoformat()
+
+                # 提取基本信息
+                phase = (pod.status.phase or "Unknown") if pod.status else "Unknown"
+                pod_ip = (pod.status.pod_ip if pod.status else None) or None
+                host_ip = (pod.status.host_ip if pod.status else None) or None
+                node_name = (pod.spec.node_name if pod.spec else None) or None
+
+                # 计算归一化状态
+                status, reason, message, restart_count = K8sServiceHandler._compute_pod_status(
+                    pod, phase, deletion_timestamp
+                )
+
+                # 构建 PodStatusInfo
+                pod_status_info = PodStatusInfo(
+                    pod_name=pod_name,
+                    namespace=pod_namespace,
+                    status=status,
+                    phase=phase,
+                    pod_ip=pod_ip,
+                    host_ip=host_ip,
+                    node_name=node_name,
+                    reason=reason,
+                    message=message,
+                    restart_count=restart_count,
+                    deletion_timestamp=deletion_timestamp,
+                )
+                pod_statuses.append(pod_status_info)
+            logger.info(
+                "监控接口完成 Pod 状态查询: namespace=%s total=%s running=%s",
+                namespace,
+                len(pod_statuses),
+                sum(1 for p in pod_statuses if p.status == "Running"),
+            )
+
+            return pod_statuses
+
+        finally:
+            await api_client.close()
+
+    @staticmethod
+    def _compute_pod_status(
+        pod: client.V1Pod,
+        phase: str,
+        deletion_timestamp: Optional[str],
+    ) -> tuple[str, Optional[str], Optional[str], int]:
+        """计算 Pod 的归一化状态。
+
+        Args:
+            pod: K8s Pod 对象
+            phase: Pod 原生 phase
+            deletion_timestamp: Pod 删除时间戳
+
+        Returns:
+            (status, reason, message, restart_count) 元组
+            - status: 归一化状态（Running/Pending/Failed/Terminated/CrashLoopBackOff/Terminating 等）
+            - reason: 异常原因（如果有）
+            - message: 详细信息（如果有）
+            - restart_count: 容器重启次数
+        """
+        # 优先级 1: 检测 Terminating 状态
+        if deletion_timestamp:
+            return "Terminating", "DeletionTimestamp", "Pod is being deleted", 0
+
+        # 获取容器状态
+        container_statuses = (pod.status.container_statuses or []) if pod.status else []
+        if not container_statuses:
+            # 没有容器状态，直接返回 phase
+            return phase, None, None, 0
+
+        # 计算总重启次数
+        total_restart_count = sum(cs.restart_count or 0 for cs in container_statuses)
+
+        # 优先级 2: 检查容器是否处于 Waiting 状态
+        for cs in container_statuses:
+            if not cs.state:
+                continue
+
+            waiting = getattr(cs.state, "waiting", None)
+            if waiting:
+                reason = getattr(waiting, "reason", None) or "Waiting"
+                message = getattr(waiting, "message", None) or ""
+                # 常见的失败状态
+                if reason in (
+                    "ImagePullBackOff",
+                    "ErrImagePull",
+                    "CrashLoopBackOff",
+                    "CreateContainerConfigError",
+                    "InvalidImageName",
+                ):
+                    return reason, reason, message, total_restart_count
+                # 其他 Waiting 状态
+                return "Waiting", reason, message, total_restart_count
+
+            # 优先级 3: 检查容器是否已 Terminated
+            terminated = getattr(cs.state, "terminated", None)
+            if terminated:
+                exit_code = getattr(terminated, "exit_code", None)
+                reason = getattr(terminated, "reason", None) or "Terminated"
+                message = getattr(terminated, "message", None) or ""
+                # 非零退出码表示错误
+                if exit_code and exit_code != 0:
+                    return "Error", reason, f"Exit code: {exit_code}. {message}", total_restart_count
+                return "Terminated", reason, message, total_restart_count
+
+        # 优先级 4: 返回 K8s 原生 phase
+        return phase, None, None, total_restart_count
 
 
 class K8sDeployController:
