@@ -126,6 +126,11 @@ class ContainerSpec:
     cpu_limit: Optional[str] = None
     memory_limit: Optional[str] = None
 
+    readiness_probe_type: Optional[str] = None
+    readiness_initial_delay: int = 5
+    readiness_period: int = 10
+    readiness_timeout_seconds: int = 3
+
     def __post_init__(self) -> None:
         if not self.name:
             raise ValueError("container name is required")
@@ -161,8 +166,6 @@ class K8sServiceHandler:
             pod_name: str = None,
             extra_labels: Optional[Dict[str, str]] = None,
             restart_policy: str = "Always",
-            readiness_initial_delay: int = 5,
-            readiness_period: int = 10,
             kubeconfig: Optional[str] = None,
             ready_timeout: float = 300.0,
             ready_poll_interval: float = 2.0,
@@ -188,8 +191,6 @@ class K8sServiceHandler:
         self._namespace = namespace
         self._extra_labels: Dict[str, str] = dict(extra_labels or {})
         self._restart_policy = restart_policy
-        self._readiness_initial_delay = int(readiness_initial_delay)
-        self._readiness_period = int(readiness_period)
         self._kubeconfig = kubeconfig
         self._ready_timeout = float(ready_timeout)
         self._ready_poll_interval = float(ready_poll_interval)
@@ -289,6 +290,40 @@ class K8sServiceHandler:
             limits=limits or None
         )
 
+    @classmethod
+    def _build_readiness_probe(cls, spec: ContainerSpec) -> Optional[client.V1Probe]:
+        if spec.readiness_probe_type == "http":
+            return client.V1Probe(
+                http_get=client.V1HTTPGetAction(
+                    port=spec.port,
+                    path="/healthz",
+                ),
+                initial_delay_seconds=spec.readiness_initial_delay,
+                period_seconds=spec.readiness_period,
+                timeout_seconds=spec.readiness_timeout_seconds,
+            )
+        elif spec.readiness_probe_type == "websockets":
+            return client.V1Probe(
+                _exec=client.V1ExecAction(
+                    command=[
+                        "python",
+                        "/app/jiuwenclaw/tools/ws_probe.py"
+                    ]
+                ),
+                initial_delay_seconds=spec.readiness_initial_delay,
+                period_seconds=spec.readiness_period,
+                timeout_seconds=spec.readiness_timeout_seconds,
+            )
+        elif spec.readiness_probe_type == "tcp":
+            return client.V1Probe(
+                tcp_socket=client.V1TCPSocketAction(port=spec.port),
+                    initial_delay_seconds=spec.readiness_initial_delay,
+                    period_seconds=spec.readiness_period,
+                    timeout_seconds=spec.readiness_timeout_seconds,
+            )
+        else:
+            return None
+
     def _generate_pod_name(self) -> str:
         return f"{self._name_prefix}-{self._random_suffix(10)}-{self._random_suffix(5)}"
 
@@ -362,7 +397,7 @@ class K8sServiceHandler:
                 annotations[
                     f"container.apparmor.security.beta.kubernetes.io/{spec.name}"
                 ] = "unconfined"
- 
+
             pod_containers.append(
                 client.V1Container(
                     name=spec.name,
@@ -379,11 +414,7 @@ class K8sServiceHandler:
                     volume_mounts=container_volume_mounts or None,
                     resources=self._build_container_resources(spec),
                     security_context=self._build_security_context(spec),
-                    readiness_probe=client.V1Probe(
-                        tcp_socket=client.V1TCPSocketAction(port=spec.port),
-                        initial_delay_seconds=self._readiness_initial_delay,
-                        period_seconds=self._readiness_period,
-                    ),
+                    readiness_probe=self._build_readiness_probe(spec),
                 )
             )
 
