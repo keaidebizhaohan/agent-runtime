@@ -153,9 +153,13 @@ class Access(IAccess):
     ) -> None:
         """运行时热更新配置。标记当前 ServiceManager 为待老化，创建新的 ServiceManager。"""
         logger.info("Access 开始热更新配置，将标记当前 ServiceManager 为待老化并创建新实例")
+        
+        # 记录旧的 ServiceManager（用于后续清理）
+        old_sm = self._service_manager
+        
         # 标记当前 ServiceManager 为待老化状态
-        if self._service_manager:
-            self._service_manager.mark_deprecated()
+        if old_sm:
+            old_sm.mark_deprecated()
             logger.info("当前 ServiceManager 已标记为待老化")
 
         # 创建新的 ServiceManager（异步）
@@ -173,7 +177,16 @@ class Access(IAccess):
             self._strategy = strategy
         if session_config and self._strategy:
             self._strategy.configure(session_config.concurrency, session_config.ttl)
+        
         logger.info("Access 配置已热更新, strategy=%s", type(self._strategy).__name__ if self._strategy else None)
+        
+        # 立即尝试清理老化的 ServiceManager（如果已经没有活跃任务）
+        if old_sm:
+            cleaned = await old_sm.try_cleanup_if_idle()
+            if cleaned:
+                logger.info("老化的 ServiceManager 已在 update_config 后立即清理")
+            else:
+                logger.debug("老化的 ServiceManager 仍有活跃任务，将在请求完成后清理")
 
     async def send_message(self, msg: IRequest | ISessionRequest) -> AsyncIterator[Any]:
         # 1) 未 init 时直接失败并打 error
