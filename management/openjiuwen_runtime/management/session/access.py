@@ -151,25 +151,21 @@ class Access(IAccess):
             self, config: Optional[AccessConfig] = None, session_config: Optional[SessionConfig] = None,
             strategy: Optional[ISessionStrategy] = None,
     ) -> None:
-        """运行时热更新配置。标记当前 ServiceManager 为待老化，创建新的 ServiceManager。"""
-        logger.info("Access 开始热更新配置，将标记当前 ServiceManager 为待老化并创建新实例")
+        """运行时热更新配置。创建新的 ServiceManager，异步停止旧的 ServiceManager。"""
+        logger.info("Access 开始热更新配置，将创建新 ServiceManager 并异步停止旧实例")
         
         # 记录旧的 ServiceManager（用于后续清理）
         old_sm = self._service_manager
         
-        # 标记当前 ServiceManager 为待老化状态
-        if old_sm:
-            old_sm.mark_deprecated()
-            logger.info("当前 ServiceManager 已标记为待老化")
-
-        # 创建新的 ServiceManager（异步）
+        # 先创建新的 ServiceManager（避免服务中断）
         new_sm = await self._service_manager_factory()
         # 初始化并启动新 ServiceManager
         await new_sm.init(self._response_parser)
         await new_sm.start()
+        
         # 切换到新的 ServiceManager
         self._service_manager = new_sm
-
+        
         # 更新配置
         if config:
             self._config = config
@@ -180,13 +176,63 @@ class Access(IAccess):
         
         logger.info("Access 配置已热更新, strategy=%s", type(self._strategy).__name__ if self._strategy else None)
         
-        # 立即尝试清理老化的 ServiceManager（如果已经没有活跃任务）
+        # 异步停止旧的 ServiceManager（不阻塞新服务）
         if old_sm:
+            asyncio.create_task(self._graceful_stop_old_service_manager(old_sm))
+    
+    async def _graceful_stop_old_service_manager(self, old_sm: IServiceManager) -> None:
+        """优雅停止旧的 ServiceManager：先标记为 deprecated，然后尝试清理。
+        
+        该方法在后台异步执行，不会阻塞新服务的运行。
+        """
+        try:
+            # 标记为待老化状态
+            old_sm.mark_deprecated()
+            logger.info("旧 ServiceManager 已标记为待老化状态")
+            
+            # 尝试立即清理（如果没有活跃任务）
             cleaned = await old_sm.try_cleanup_if_idle()
             if cleaned:
-                logger.info("老化的 ServiceManager 已在 update_config 后立即清理")
-            else:
-                logger.debug("老化的 ServiceManager 仍有活跃任务，将在请求完成后清理")
+                logger.info("旧 ServiceManager 已在后台异步清理完成")
+                return
+            
+            # 如果无法立即清理，启动定期清理任务
+            logger.info("旧 ServiceManager 仍有活跃任务，启动后台清理监控")
+            await self._periodic_cleanup_deprecated_sm(old_sm)
+            
+        except Exception as e:
+            logger.error("停止旧 ServiceManager 失败: %s", e, exc_info=True)
+    
+    async def _periodic_cleanup_deprecated_sm(self, old_sm: IServiceManager, max_retries: int = 20, interval: float = 30.0) -> None:
+        """定期尝试清理已废弃的 ServiceManager。
+        
+        Args:
+            old_sm: 待清理的旧 ServiceManager
+            max_retries: 最大重试次数（默认 20 次，约 10 分钟）
+            interval: 重试间隔秒数（默认 30 秒）
+        """
+        for attempt in range(max_retries):
+            try:
+                # 检查是否已经停止
+                if not hasattr(old_sm, '_running') or not getattr(old_sm, '_running', True):
+                    logger.info("旧 ServiceManager 已停止，退出清理监控")
+                    return
+                
+                # 尝试清理
+                cleaned = await old_sm.try_cleanup_if_idle()
+                if cleaned:
+                    logger.info("旧 ServiceManager 在第 %d 次重试后清理成功", attempt + 1)
+                    return
+                
+                # 等待下次重试
+                await asyncio.sleep(interval)
+                
+            except Exception as e:
+                logger.warning("第 %d 次清理旧 ServiceManager 失败: %s", attempt + 1, e)
+                await asyncio.sleep(interval)
+        
+        # 达到最大重试次数，强制停止
+        logger.warning("旧 ServiceManager 在 %d 次重试后仍未清理", max_retries)
 
     async def send_message(self, msg: IRequest | ISessionRequest) -> AsyncIterator[Any]:
         # 1) 未 init 时直接失败并打 error
