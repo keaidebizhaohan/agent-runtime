@@ -93,6 +93,8 @@ class ServiceManager(IServiceManager):
         self._stop_completed: bool = False
         # 老化标记：当调用 update_config 时设置为 True，表示此 ServiceManager 待老化
         self._deprecated: bool = False
+        # stop 操作的锁，防止并发调用
+        self._stop_lock = asyncio.Lock()
 
     async def init(self, response_parser: IResponseParser) -> None:
         self._response_parser = response_parser
@@ -151,68 +153,86 @@ class ServiceManager(IServiceManager):
 
     async def stop(self) -> None:
         """停 message/autoscale/用户子任务、取消全部计时、delete 所有 in_use/idle 实例并清亲和表；幂等。"""
-        if self._stop_completed:
-            logger.debug("ServiceManager stop 被忽略: 已停止")
-            return
-        self._stop_completed = True
-        self._running = False
-        self._q.mark_closed()
-        logger.info("ServiceManager 正在停止: 已标记队列关闭, 在途用户路由任务数=%s", len(self._user_route_tasks))
-        for t in (self._message_task, self._autoscale_task, self._pod_monitor_task):
-            if t and not t.done():
-                t.cancel()
-                try:
-                    await t
-                except asyncio.CancelledError:
-                    pass
-        self._message_task = None
-        self._autoscale_task = None
-        self._pod_monitor_task = None
-        for ut in list(self._user_route_tasks):
-            if not ut.done():
-                ut.cancel()
-        if self._user_route_tasks:
-            await asyncio.gather(
-                *self._user_route_tasks, return_exceptions=True
-            )
-        self._user_route_tasks.clear()
-        self._to_idle_timer_armed.clear()
-        self._excess_idle_timer_armed.clear()
-        self._pending_expired_sessions.clear()
-        try:
-            await self._timer.stop_all()
-        except Exception as e:  # noqa: BLE001
-            logger.debug("Timer.stop_all: %s", e)
-        all_handlers: list[IServiceHandler] = []
-        async with self._lock:
-            # 遍历所有模板组的实例
-            for pool in self._in_use.values():
-                all_handlers.extend(pool.values())
-            for pool in self._idle.values():
-                all_handlers.extend(pool.values())
-            if self._deploying:
-                logger.info(
-                    "ServiceManager stop: 另有 %s 个 deploy 进行中的实例待清理",
-                    len(self._deploying),
+        # 使用锁防止并发调用 stop()
+        async with self._stop_lock:
+            if self._stop_completed:
+                logger.debug("ServiceManager stop 被忽略: 已停止")
+                return
+            
+            self._running = False
+            self._q.mark_closed()
+            logger.info("ServiceManager 正在停止: 已标记队列关闭, 在途用户路由任务数=%s", len(self._user_route_tasks))
+            for t in (self._message_task, self._autoscale_task, self._pod_monitor_task):
+                if t and not t.done():
+                    t.cancel()
+                    try:
+                        await t
+                    except asyncio.CancelledError:
+                        pass
+            self._message_task = None
+            self._autoscale_task = None
+            self._pod_monitor_task = None
+            for ut in list(self._user_route_tasks):
+                if not ut.done():
+                    ut.cancel()
+            if self._user_route_tasks:
+                await asyncio.gather(
+                    *self._user_route_tasks, return_exceptions=True
                 )
-                all_handlers.extend(self._deploying)
-            self._in_use.clear()
-            self._idle.clear()
-            self._deploying.clear()
-        n_release = 0
-        for h in all_handlers:
+            self._user_route_tasks.clear()
+            self._to_idle_timer_armed.clear()
+            self._excess_idle_timer_armed.clear()
+            self._pending_expired_sessions.clear()
             try:
-                await h.delete()
-                n_release += 1
+                await self._timer.stop_all()
             except Exception as e:  # noqa: BLE001
-                logger.error(
-                    "停服时 delete 服务实例失败: service_id=%s err=%s", h.id, e, exc_info=True
+                logger.debug("Timer.stop_all: %s", e)
+            all_handlers: list[IServiceHandler] = []
+            async with self._lock:
+                # 遍历所有模板组的实例
+                for pool in self._in_use.values():
+                    all_handlers.extend(pool.values())
+                for pool in self._idle.values():
+                    all_handlers.extend(pool.values())
+                if self._deploying:
+                    logger.info(
+                        "ServiceManager stop: 另有 %s 个 deploy 进行中的实例待清理",
+                        len(self._deploying),
+                    )
+                    all_handlers.extend(self._deploying)
+                self._in_use.clear()
+                self._idle.clear()
+                self._deploying.clear()
+            n_release = 0
+            n_failed = 0
+            for h in all_handlers:
+                try:
+                    await h.delete()
+                    n_release += 1
+                    logger.debug("成功删除服务实例: service_id=%s", h.id)
+                except Exception as e:  # noqa: BLE001
+                    n_failed += 1
+                    logger.error(
+                        "停服时 delete 服务实例失败: service_id=%s err=%s", h.id, e, exc_info=True
+                    )
+            
+            try:
+                await self._service_router.clear()
+            except Exception as e:  # noqa: BLE001
+                logger.error("ServiceRouter clear 失败: %s", e, exc_info=True)
+            
+            # 只有全部成功才标记为已完成，否则保持 _stop_completed=False 以便重试
+            if n_failed == 0:
+                self._stop_completed = True
+                logger.info(
+                    "ServiceManager 已完全停止: 成功释放 %s 个服务实例", n_release
                 )
-        try:
-            await self._service_router.clear()
-        except Exception as e:  # noqa: BLE001
-            logger.error("ServiceRouter clear 失败: %s", e, exc_info=True)
-        logger.info("ServiceManager 已完全停止, 已成功释放 %s 个服务实例 (总计尝试 %s 个)", n_release, len(all_handlers))
+            else:
+                logger.warning(
+                    "ServiceManager 停止未完成: 成功 %s 个, 失败 %s 个, 总计 %s 个。"
+                    "将保持 _stop_completed=False，允许通过 try_cleanup_if_idle() 重试清理",
+                    n_release, n_failed, len(all_handlers)
+                )
 
     async def handle_message(self, msg: SessionRequestWrapper) -> None:
         if self._deprecated:
@@ -558,18 +578,26 @@ class ServiceManager(IServiceManager):
             if h is None:
                 await self._fail(w, 100001, session_id=session_id)
                 return
-            logger.debug(
-                "路由到服务实例: service_id=%s session_id=%s request_id=%s",
+            
+            # 获取 Pod 信息用于日志
+            pod_name = "unknown"
+            if hasattr(h, "pod_info") and h.pod_info:
+                pod_name = h.pod_info.pod_name
+            
+            logger.info(
+                "路由到服务实例: service_id=%s session_id=%s request_id=%s pod=%s",
                 h.id,
                 session_id,
                 sreq.request_id,
+                pod_name,
             )
             await h.handle_message(w)
             logger.debug(
-                "已完成消息处理: service_id=%s session_id=%s request_id=%s",
+                "已完成消息处理: service_id=%s session_id=%s request_id=%s pod=%s",
                 h.id,
                 session_id,
                 sreq.request_id,
+                pod_name,
             )
         except asyncio.CancelledError:
             logger.error("session_id=%s 被中断执行", session_id)
@@ -1079,11 +1107,16 @@ class ServiceManager(IServiceManager):
         因为新请求都会路由到新的 ServiceManager。
         
         Returns:
-            True 表示已清理成功，False 表示仍有活跃任务无法清理。
+            True 表示已清理成功或已经清理过，False 表示仍有活跃任务无法清理。
         """
         if not self._deprecated:
             logger.debug("ServiceManager 未标记为待老化，跳过清理检查")
             return False
+        
+        # 如果已经停止过，直接返回 True（幂等）
+        if self._stop_completed:
+            logger.debug("ServiceManager 已经停止过，跳过重复清理")
+            return True
         
         # 检查是否有在途的用户路由任务
         active_tasks = [t for t in self._user_route_tasks if not t.done()]
