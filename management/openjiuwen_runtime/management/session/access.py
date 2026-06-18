@@ -119,6 +119,16 @@ class Access(IAccess):
             "Access init 完成: message_timeout=%s", getattr(config, "message_timeout", None)
         )
 
+    def get_service_manager_stats(self) -> dict | None:
+        """返回当前 ServiceManager 的业务量统计，未初始化时返回 None。"""
+        if self._service_manager is None or not hasattr(self._service_manager, "get_stats"):
+            return None
+        try:
+            return self._service_manager.get_stats()
+        except Exception as exc:
+            logger.warning("Access get_service_manager_stats failed: %s", exc)
+            return None
+
     async def shutdown(self) -> None:
         """优雅退出：停 ServiceManager 内全部 asyncio 任务与双队列、取消定时器、delete 已拉起的服务。"""
         if self._shutdown_done:

@@ -210,7 +210,7 @@ class ServiceManager(IServiceManager):
                     await h.delete()
                     n_release += 1
                     logger.debug("成功删除服务实例: service_id=%s", h.id)
-                except Exception as e:  # noqa: BLE001
+                except Exception as e:
                     n_failed += 1
                     logger.error(
                         "停服时 delete 服务实例失败: service_id=%s err=%s", h.id, e, exc_info=True
@@ -218,7 +218,7 @@ class ServiceManager(IServiceManager):
             
             try:
                 await self._service_router.clear()
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 logger.error("ServiceRouter clear 失败: %s", e, exc_info=True)
             
             # 只有全部成功才标记为已完成，否则保持 _stop_completed=False 以便重试
@@ -1090,6 +1090,27 @@ class ServiceManager(IServiceManager):
         )
         if w.cancel and not w.cancel.done():
             w.cancel.set_result(None)
+
+    def get_stats(self) -> dict:
+        """返回当前 ServiceManager 的业务量统计（纯内存读取，无 IO）。"""
+        in_use_count = sum(len(pool) for pool in self._in_use.values())
+        idle_count = sum(len(pool) for pool in self._idle.values())
+        total_inflight = sum(
+            h.inflight_requests
+            for pool in self._in_use.values()
+            for h in pool.values()
+        ) + sum(
+            h.inflight_requests
+            for pool in self._idle.values()
+            for h in pool.values()
+        )
+        return {
+            "user_queue_size": self._q.user_qsize(),
+            "routing_tasks": len(self._user_route_tasks),
+            "pods_in_use": in_use_count,
+            "pods_idle": idle_count,
+            "total_inflight_requests": total_inflight,
+        }
 
     def mark_deprecated(self) -> None:
         """标记当前 ServiceManager 为待老化状态，并停止后台循环任务。"""
