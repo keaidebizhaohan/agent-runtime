@@ -373,6 +373,7 @@ class ServiceManager(IServiceManager):
                     break
                 await self._ensure_min_idle()
             except asyncio.CancelledError:
+                logger.debug("autoscale 循环被取消")
                 break
             except Exception as e:  # noqa: BLE001
                 logger.error("autoscale 周期任务异常: %s", e, exc_info=True)
@@ -1091,9 +1092,18 @@ class ServiceManager(IServiceManager):
             w.cancel.set_result(None)
 
     def mark_deprecated(self) -> None:
-        """标记当前 ServiceManager 为待老化状态。"""
+        """标记当前 ServiceManager 为待老化状态，并停止后台循环任务。"""
         self._deprecated = True
         logger.info("ServiceManager 已标记为待老化状态")
+        
+        # 立即停止 autoscale 和 pod monitor 循环，避免继续创建新实例
+        if self._autoscale_task and not self._autoscale_task.done():
+            self._autoscale_task.cancel()
+            logger.debug("已取消 autoscale 任务")
+        
+        if self._pod_monitor_task and not self._pod_monitor_task.done():
+            self._pod_monitor_task.cancel()
+            logger.debug("已取消 pod_monitor 任务")
 
     def is_deprecated(self) -> bool:
         """检查当前 ServiceManager 是否处于待老化状态。"""
