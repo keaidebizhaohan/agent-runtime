@@ -25,6 +25,7 @@ from typing import Any, AsyncGenerator, Optional
 
 import httpx
 from a2a.client import Client, ClientFactory
+from a2a.client.errors import A2AClientError
 from a2a.server.agent_execution import AgentExecutor, RequestContext
 from a2a.server.context import ServerCallContext
 from a2a.server.events import EventQueue
@@ -197,6 +198,7 @@ class _VaRequestPayload:
     conv_id: str = ""
     trace_id: str = ""
     agent_id: str = ""
+    target: Optional[dict] = None
 
 
 @dataclass(frozen=True)
@@ -644,8 +646,11 @@ class Executor(AgentExecutor):
         text_part.text = payload.query
 
         data_struct = Struct()
+        target = dict(payload.target or {})
+        target.setdefault("conversation_id", payload.conv_id)
         data_struct.update(
             {
+                "target": target,
                 "headers": payload.headers,
                 "body": payload.body,
                 "params": payload.params or {},
@@ -674,30 +679,9 @@ class Executor(AgentExecutor):
             return stream_resp.status_update
         return None
 
-    def _extract_upstream_error(self, event: TaskArtifactUpdateEvent) -> Optional[dict]:
-        """识别 VA 上游错误终态帧。
-
-        AgentEngine ``versatile_proxy.py:336`` 把 ``event=='exception'`` 视为
-        workflow_complete 终态。这里把 ``event in ("error", "exception")`` 都识别
-        为终态错误，返回 data 部分（含 code/message）；非错误帧返回 None。
-
-        识别后 Executor 应把 Task 标 FAILED 并清空 ``va_task_id``，避免下次请求被
-        当成 cascade 续轮、用 stale task_id 调 VA 锁死 conversation。
-        """
-        for part in event.artifact.parts:
-            if part.WhichOneof("content") != "data":
-                continue
-            frame = MessageToDict(part.data)
-            if not isinstance(frame, dict):
-                continue
-            if frame.get("event") in ("error", "exception"):
-                inner = frame.get("data")
-                return inner if isinstance(inner, dict) else {}
-        return None
-
     @staticmethod
     def _format_upstream_error(err: dict) -> str:
-        """把上游 error/exception 的 data 拼成可展示的错误描述字符串。"""
+        """把 VA FAILED 状态携带的 upstream_error 拼成可展示的错误描述字符串。"""
         code = err.get("code")
         message = err.get("message") or err.get("msg") or ""
         if code:
@@ -760,7 +744,7 @@ class Executor(AgentExecutor):
         VA 侧在 updater.complete(message) 时通过 Part 的 metadata {"vatype": "workflow_result"} 标识，
         DataPart 为纯文本 string_value。
         """
-        if not event.status or not event.status.message:
+        if not event.status or not event.status.HasField("message"):
             return None
         for part in event.status.message.parts:
             if not part.HasField("text") or not part.HasField("metadata"):
@@ -768,6 +752,29 @@ class Executor(AgentExecutor):
             meta = MessageToDict(part.metadata)
             if meta.get("vatype") == "workflow_result":
                 return part.text
+        return None
+
+    def _extract_failed_error(self, event: TaskStatusUpdateEvent) -> Optional[dict]:
+        """从 VA Sidecar 的 FAILED 状态事件 message 中提取 upstream_error。"""
+        if not event.status or not event.status.HasField("message"):
+            return None
+        for part in event.status.message.parts:
+            if not part.HasField("text") or not part.HasField("metadata"):
+                continue
+            meta = MessageToDict(part.metadata)
+            if meta.get("vatype") != "upstream_error":
+                continue
+            raw_text = part.text or ""
+            if not raw_text:
+                continue
+            try:
+                parsed = json.loads(raw_text)
+            except (ValueError, TypeError):
+                return {"message": raw_text}
+            if isinstance(parsed, dict):
+                inner = parsed.get("data") if isinstance(parsed.get("data"), dict) else parsed
+                return inner
+            return {"message": raw_text}
         return None
 
     @staticmethod
@@ -889,6 +896,7 @@ class Executor(AgentExecutor):
                 conv_id=conv_id,
                 trace_id=trace_id,
                 agent_id=agent_id,
+                target={"type": "workflow", "intent": effective_intent},
             )
         )
 
@@ -962,7 +970,7 @@ class Executor(AgentExecutor):
                         logger.debug("[Executor] VA TaskStatusUpdateEvent(COMPLETED)")
                     elif event.status.state == TASK_STATE_FAILED:
                         if upstream_error is None:
-                            upstream_error = {"message": "VA 任务异常终止"}
+                            upstream_error = self._extract_failed_error(event) or {"message": "VA 任务异常终止"}
                         logger.debug("[Executor] VA TaskStatusUpdateEvent(FAILED)")
 
         except Exception as e:
@@ -1034,6 +1042,10 @@ class Executor(AgentExecutor):
         # 当前轮输入能透传给下游工作流，而不是回退到首轮缓存 body。
         body = dict(original_body)
         body["stream"] = True
+        input_section = body.get("input") if isinstance(body.get("input"), dict) else {}
+        custom_data = body.get("custom_data") if isinstance(body.get("custom_data"), dict) else {}
+        custom_inputs = custom_data.get("inputs") if isinstance(custom_data.get("inputs"), dict) else {}
+        routed_intent = input_section.get("intent") or custom_inputs.get("intent") or ""
 
         # 在 a2a 续轮调用侧记录 Versatile 前后 Tag 日志
         versatile_call_id = str(uuid.uuid4())
@@ -1052,6 +1064,7 @@ class Executor(AgentExecutor):
                 conv_id=conv_id,
                 trace_id=trace_id,
                 agent_id=agent_id,
+                target={"type": "workflow", "intent": routed_intent} if routed_intent else None,
             )
         )
 
@@ -1105,7 +1118,7 @@ class Executor(AgentExecutor):
                         logger.debug("[Executor] VA 续轮 TaskStatusUpdateEvent(COMPLETED)")
                     elif event.status.state == TASK_STATE_FAILED:
                         if upstream_error is None:
-                            upstream_error = {"message": "VA 任务异常终止"}
+                            upstream_error = self._extract_failed_error(event) or {"message": "VA 任务异常终止"}
                         logger.debug("[Executor] VA 续轮 TaskStatusUpdateEvent(FAILED)")
 
         except Exception as e:
@@ -1357,6 +1370,8 @@ class Executor(AgentExecutor):
 
         content = ""
         child_task_id = ""
+        terminal_status: Optional[str] = None   # 子 Agent 终态 FAILED/CANCELED（问题 1）
+        terminal_error = ""
         try:
             async for frame in self._drive_sub_agent(
                 spec, sub_conv_id, child_path, turn_ctx, cancel_event
@@ -1371,6 +1386,10 @@ class Executor(AgentExecutor):
                     continue
                 if ftype == "__completed__":
                     content = frame.get("content", "")
+                    continue
+                if ftype == "__terminal__":
+                    terminal_status = frame.get("status", "failed")
+                    terminal_error = frame.get("error", "")
                     continue
                 # report 帧：已盖章（更深层 sub_task）透传 / 否则盖章为本节点 agent 帧
                 if frame.get("type") == "sub_task":
@@ -1393,7 +1412,19 @@ class Executor(AgentExecutor):
                 error=str(exc), child_task_id=child_task_id,
             )
 
-        if cancel_event.is_set():
+        if terminal_status == "failed":
+            err = terminal_error or "子 Agent 终态异常"
+            await self._emit_sub_task(
+                turn_ctx, child_path, "agent",
+                {"event": "node_end", "status": "failed", "error": err},
+            )
+            logger.warning(f"[Executor] 子 Agent 终态 FAILED：entity={spec.entity_id}, error={err}")
+            return SubAgentResult(
+                entity_id=spec.entity_id, status="failed",
+                error=err, child_task_id=child_task_id,
+            )
+
+        if cancel_event.is_set() or terminal_status == "cancelled":
             await self._emit_sub_task(
                 turn_ctx, child_path, "agent",
                 {"event": "node_end", "status": "cancelled", "reason": "用户取消"},
@@ -1517,10 +1548,21 @@ class Executor(AgentExecutor):
                         if frame is not None:
                             yield frame
                     elif kind == "status_update":
-                        if _is_completed_status(stream_resp.status_update):
+                        su = stream_resp.status_update
+                        if _is_completed_status(su):
                             yield {
                                 "type": "__completed__",
-                                "content": extract_content(stream_resp.status_update),
+                                "content": extract_content(su),
+                            }
+                            return
+                        state = su.status.state if (su and su.status) else None
+                        if state in (TASK_STATE_FAILED, TASK_STATE_CANCELED):
+                            # 子 Agent 终态异常：不能落到流末被当成 done 静默上报（问题 1）。
+                            # error 取 status.message 文本（基础设施级失败时承载错因）。
+                            yield {
+                                "type": "__terminal__",
+                                "status": "failed" if state == TASK_STATE_FAILED else "cancelled",
+                                "error": extract_content(su),
                             }
                             return
                 return  # 流正常结束
@@ -1533,7 +1575,14 @@ class Executor(AgentExecutor):
                     yield {"type": "__completed__", **final}
                     return
                 raise
-            except (httpx.RemoteProtocolError, httpx.ReadError, OSError) as exc:
+            except (httpx.RemoteProtocolError, httpx.ReadError, OSError, A2AClientError) as exc:
+                # a2a-sdk 把 httpx 传输错误（RequestError 系）统一包成 A2AClientError，
+                # 故必须显式纳入；仅当底层 __cause__ 为传输类错误时才视为可恢复瞬断走重连，
+                # 否则（HTTP 4xx/5xx、SSE 协议错等非传输 A2AClientError）按真失败 re-raise。
+                if isinstance(exc, A2AClientError) and not isinstance(
+                    getattr(exc, "__cause__", None), (httpx.RequestError, OSError)
+                ):
+                    raise
                 if child_task_id is None:
                     raise   # 首帧前断线，无 task_id 可重连/查询 → failed（wait_for 兜底）
                 if retry_count >= max_retries:
@@ -1628,7 +1677,17 @@ class Executor(AgentExecutor):
             return {"workflow_id": spec.workflow_id, "status": "cancelled",
                     "result": final_result, "error": "", "elapsed_ms": elapsed_ms}
 
-        node_end_result = dict(final_result) if isinstance(final_result, dict) else {"value": final_result}
+        if final_result is None:
+            # VA 流未给出任何终态（异常截断 / VA 崩溃）→ 不能当 done 静默上报（问题 2）。
+            await self._emit_sub_task(
+                turn_ctx, wf_path, "workflow",
+                {"event": "node_end", "status": "failed", "error": "VA 工作流未返回终态结果"},
+            )
+            logger.warning(f"[Executor] 工作流无终态结果：workflow={spec.workflow_id}")
+            return {"workflow_id": spec.workflow_id, "status": "failed",
+                    "result": None, "error": "VA 工作流未返回终态结果", "elapsed_ms": elapsed_ms}
+
+        node_end_result = dict(final_result)   # None 已在上方拦截，此处必为 dict
         node_end_result["elapsed_ms"] = elapsed_ms
         await self._emit_sub_task(
             turn_ctx, wf_path, "workflow",
@@ -1657,22 +1716,29 @@ class Executor(AgentExecutor):
         params = cached.get("params", {})
         trace_id = cached.get("trace_id", "")
 
+        # 与单调路径 _call_versatile_adapter 同构：先做推荐入口临时改写，
+        # 再用改写后的 query/intent 同时覆盖 body 入参与 target（二者必须一致，否则下游
+        # 工作流入参与路由 intent 对不上）。
+        effective_intent, effective_query = _rewrite_recommend_delegate(
+            delegate.intent, delegate.task_description,
+        )
+
         # 用 delegate 的 query/intent 覆盖 body（与 _call_versatile_adapter 同构）
         input_section = dict(body.get("input") or {})
-        input_section["query"] = delegate.task_description
-        input_section["intent"] = delegate.intent
+        input_section["query"] = effective_query
+        input_section["intent"] = effective_intent
         body["input"] = input_section
         custom_data = dict(body.get("custom_data") or {})
         custom_inputs = dict(custom_data.get("inputs") or {})
-        custom_inputs["query"] = delegate.task_description
-        custom_inputs["intent"] = delegate.intent
+        custom_inputs["query"] = effective_query
+        custom_inputs["intent"] = effective_intent
         custom_data["inputs"] = custom_inputs
         body["custom_data"] = custom_data
         body["stream"] = True
 
         request = self._build_va_message(
             _VaRequestPayload(
-                query=delegate.task_description,
+                query=effective_query,
                 headers=headers,
                 body=body,
                 params=params,
@@ -1680,6 +1746,9 @@ class Executor(AgentExecutor):
                 conv_id=conv_id,
                 trace_id=trace_id,
                 agent_id=delegate.target_agent or "",
+                # 路由只用 intent：wf_path[-1] 是模型在单次并行调用内生成的局部唯一 id，
+                # 非 VA 可识别的真实 workflow_id，不能进 target（否则有撞 id 误路由风险）。
+                target={"type": "workflow", "intent": effective_intent} if effective_intent else None,
             )
         )
 
@@ -1705,7 +1774,10 @@ class Executor(AgentExecutor):
                     final_result = {"workflow_result": self._extract_workflow_result(event)}
                     break
                 elif state == TASK_STATE_FAILED:
-                    raise RuntimeError(f"VA 工作流异常终止：path={list(wf_path)}")
+                    err = self._extract_failed_error(event) or {"message": "VA 工作流异常终止"}
+                    raise RuntimeError(
+                        f"VA 工作流异常终止：path={list(wf_path)}，{self._format_upstream_error(err)}"
+                    )
                 elif state == TASK_STATE_INPUT_REQUIRED:
                     # 本需求声明不支持中断（PENDING P-011）；并行 fire-and-gather 无法续轮 →
                     # 防御性当异常失败，不静默（同事确认本场景不应出现该终态）。

@@ -47,6 +47,7 @@ class TestAdapterEvent:
             )
         )
         assert e.execution_completed.is_failed is True
+        assert e.execution_completed.error_message == ""
 
     @staticmethod
     def test_execution_input_required_event():

@@ -25,6 +25,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -58,7 +60,7 @@ from common.events import (
     ToolStatusEvent,
 )
 from config import get_settings
-from orchestrator.executor import Executor, _TurnContext
+from orchestrator.executor import Executor, _TurnContext, _VaRequestPayload
 
 
 CONV_ID = "conv-delegate-1"
@@ -239,6 +241,80 @@ def _make_executor_with_va_stream(va_events: list) -> Executor:
     task_store.save = AsyncMock()
 
     return Executor(va_client=va_client, redis=redis, task_store=task_store)
+
+
+def test_build_va_message_packs_target_for_workflow_routing():
+    executor = _make_executor_with_va_stream([])
+    request = executor._build_va_message(
+        _VaRequestPayload(
+            query="查理财",
+            headers={},
+            body={"custom_data": {}},
+            params={},
+            conv_id=CONV_ID,
+            target={
+                "type": "workflow",
+                "intent": "理财推荐",
+                "workflow_id": "wf_wealth",
+            },
+        )
+    )
+
+    data_part = next(p for p in request.message.parts if p.WhichOneof("content") == "data")
+    carried = MessageToDict(data_part.data)
+    assert carried["target"] == {
+        "type": "workflow",
+        "conversation_id": CONV_ID,
+        "intent": "理财推荐",
+        "workflow_id": "wf_wealth",
+    }
+
+
+def test_a2a_message_target_routes_to_va_workflow_adapter(tmp_path):
+    va_root = Path(__file__).resolve().parents[3] / "versatile_adapter"
+    if str(va_root) not in sys.path:
+        sys.path.insert(0, str(va_root))
+
+    from dispatcher.runner import VersatileAdapterRunner
+
+    config_path = tmp_path / "versatile_proxy.yaml"
+    config_path.write_text(
+        """
+adapters:
+  - name: default_controller
+    type: controller
+    url_template: "http://mock-host/v1/agents/agent-a/conversations/{conversation_id}"
+  - name: wf_wealth
+    type: workflow
+    url_template: "http://mock-host/v1/workflows/{workflow_id}/conversations/{conversation_id}"
+    workflow_id: wf_wealth
+    intent: "理财推荐"
+""",
+        encoding="utf-8",
+    )
+    executor = _make_executor_with_va_stream([])
+    request = executor._build_va_message(
+        _VaRequestPayload(
+            query="查理财",
+            headers={},
+            body={"custom_data": {}},
+            params={},
+            conv_id=CONV_ID,
+            target={
+                "type": "workflow",
+                "intent": "理财推荐",
+                "workflow_id": "wf_wealth",
+            },
+        )
+    )
+
+    data_part = next(p for p in request.message.parts if p.WhichOneof("content") == "data")
+    target = MessageToDict(data_part.data)["target"]
+    runner = VersatileAdapterRunner(config_path=config_path)
+    cfg = runner._match_workflow(target)
+
+    assert cfg is not None
+    assert cfg.name == "wf_wealth"
 
 
 def _is_event_with_state(event, state) -> bool:
@@ -619,6 +695,43 @@ async def test_va_failed_event_does_not_emit_input_required(monkeypatch):
     enqueued = _drain_queue(queue)
     input_required = [e for e in enqueued if _is_event_with_state(e, TASK_STATE_INPUT_REQUIRED)]
     assert len(input_required) == 0, "VA FAILED 路径不应发出 INPUT_REQUIRED 状态事件"
+
+
+@pytest.mark.asyncio
+async def test_va_failed_event_with_plain_text_error_is_forwarded(monkeypatch):
+    """VA FAILED 携带非 JSON upstream_error 文本时，应原样作为错误详情透传。"""
+    event = _va_failed_event(error_payload=None)
+    message = Message(
+        role=ROLE_AGENT,
+        message_id="va-msg-failed-text",
+        task_id="va-task-1",
+        context_id=CONV_ID,
+        parts=[_text_part("上游服务不可用", vatype="upstream_error")],
+    )
+    event.status.message.CopyFrom(message)
+    executor, _task, _task_store = _make_executor_with_real_task([event])
+
+    async def fake_agent_stream(**kwargs):
+        yield DelegateRequest(intent="查", task_description="查")
+
+    monkeypatch.setattr("orchestrator.executor.agent_stream", fake_agent_stream)
+
+    queue = EventQueue()
+    await executor.run_agent(
+        _make_turn_ctx(queue),
+        query="x",
+        original_body={},
+        cascade_result=None,
+    )
+
+    enqueued = _drain_queue(queue)
+    failed_events = [e for e in enqueued if _is_event_with_state(e, TASK_STATE_FAILED)]
+    assert len(failed_events) == 1
+    text_chunks = [
+        p.text for p in failed_events[0].status.message.parts
+        if p.WhichOneof("content") == "text"
+    ]
+    assert "上游服务不可用" in text_chunks
 
 
 @pytest.mark.asyncio

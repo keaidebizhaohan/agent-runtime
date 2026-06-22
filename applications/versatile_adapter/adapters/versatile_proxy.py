@@ -9,7 +9,6 @@ VersatileProxy — HTTP+SSE 流式调用基类。
 """
 from __future__ import annotations
 
-import json as _json
 from typing import AsyncGenerator, Optional
 
 from abc import abstractmethod
@@ -26,12 +25,13 @@ from adapters.base_adapter import BaseAdapter
 class VersatileStreamCtx:
     """SSE 行循环中累积的可变状态，贯穿 _process_line → _process_chunk → _on_stream_end。"""
 
-    __slots__ = ("completed", "is_failed", "execution_result")
+    __slots__ = ("completed", "is_failed", "execution_result", "error_message")
 
     def __init__(self) -> None:
         self.completed: bool = False
         self.is_failed: bool = False
         self.execution_result: str | None = None
+        self.error_message: str = ""
 
 
 class VersatileProxy(BaseAdapter):
@@ -154,11 +154,7 @@ class VersatileProxy(BaseAdapter):
         for key, value in request.headers.items():
             cmd += f" -H '{key}: {value}'"
         if body:
-            try:
-                json_body = _json.loads(body.decode("utf-8"))
-                cmd += f" -d '{_json.dumps(json_body, ensure_ascii=False)}'"
-            except Exception:
-                cmd += f" -d '{body.decode('utf-8', errors='replace')}'"
+            cmd += f" -d '{body.decode('utf-8', errors='replace')}'"
         banner_start = f"{'='*20} Proxy Request (Stream) Start {'='*20}"
         banner_end = f"{'='*20} Proxy Request (Stream) End {'='*20}"
         logger.info("[VersatileProxy] {}", banner_start)

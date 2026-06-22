@@ -177,6 +177,41 @@ async def test_run_sub_agent_failure_marks_failed():
     assert envs[-1]["data"] == {"event": "node_end", "status": "failed", "error": "接口报错"}
 
 
+async def test_run_sub_agent_terminal_failed_not_silent_done():
+    """问题 1：__terminal__(failed) 终态 → 结果 failed，不落空内容 done。"""
+    executor = make_executor(sub_agent_client=MagicMock())
+    _set_fake_drive(executor, frames=[
+        {"type": "__task_created__", "task_id": "child-1"},
+        {"type": "__terminal__", "status": "failed", "error": "子Agent内部异常"},
+    ])
+    ctx = make_turn_ctx()
+
+    result = await executor._run_sub_agent(_specs("A")[0], ctx, asyncio.Event(), ("A",))
+
+    assert result.status == "failed"
+    assert "子Agent内部异常" in result.error
+    assert result.content == ""
+    envs = collect_sub_tasks(ctx.event_queue)
+    assert envs[-1]["data"]["event"] == "node_end"
+    assert envs[-1]["data"]["status"] == "failed"
+
+
+async def test_run_sub_agent_terminal_cancelled_marks_cancelled():
+    """问题 1：__terminal__(cancelled) 终态 → 结果 cancelled。"""
+    executor = make_executor(sub_agent_client=MagicMock())
+    _set_fake_drive(executor, frames=[
+        {"type": "__task_created__", "task_id": "child-1"},
+        {"type": "__terminal__", "status": "cancelled", "error": ""},
+    ])
+    ctx = make_turn_ctx()
+
+    result = await executor._run_sub_agent(_specs("A")[0], ctx, asyncio.Event(), ("A",))
+
+    assert result.status == "cancelled"
+    envs = collect_sub_tasks(ctx.event_queue)
+    assert envs[-1]["data"]["status"] == "cancelled"
+
+
 async def test_run_sub_agent_cancelled_when_token_set():
     executor = make_executor(sub_agent_client=MagicMock())
     _set_fake_drive(executor, frames=[])  # 无帧，循环后检测 cancel

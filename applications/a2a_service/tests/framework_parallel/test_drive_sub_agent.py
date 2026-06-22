@@ -29,6 +29,7 @@ from tests.framework_parallel._helpers import (
     make_turn_ctx,
     sr_artifact,
     sr_completed_text,
+    sr_failed,
     sr_task,
     task_completed_text,
 )
@@ -69,6 +70,27 @@ def test_streamresponse_is_not_task_instance():
     sr = StreamResponse(task=Task(id="x"))
     assert sr.WhichOneof("payload") == "task"
     assert not isinstance(sr, Task)
+
+
+# ── 问题 1：子 Agent FAILED 终态 → __terminal__，不可落流末当 done ────────────
+
+
+async def test_failed_status_yields_terminal_not_silent_done():
+    """子 Agent 返回 FAILED status_update → 产出 __terminal__(failed)，error 取 message 文本。"""
+    client = FakeSubAgentClient(send=[FakeAsyncStream([
+        sr_task("child-1"),
+        sr_failed("子Agent内部异常"),
+    ])])
+    executor = make_executor(sub_agent_client=client)
+
+    frames = await _drive(executor)
+
+    assert frames[0] == {"type": "__task_created__", "task_id": "child-1"}
+    assert frames[-1] == {
+        "type": "__terminal__", "status": "failed", "error": "子Agent内部异常",
+    }
+    # 关键：未产出 __completed__（不会被上层当成功）
+    assert all(f.get("type") != "__completed__" for f in frames)
 
 
 # ── RECONN-03：断连期间已完成 → resubscribe 抛错 → tasks/get 回退 ────────────

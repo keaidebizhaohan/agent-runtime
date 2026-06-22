@@ -11,6 +11,7 @@ VersatileAdapterRunner — 配置驱动的动态路由层。
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import AsyncGenerator, Optional
 
@@ -23,7 +24,34 @@ from config import get_settings
 from event.events import AdapterEvent
 
 
-_DEFAULT_CONFIG_PATH = Path("/etc/edpagent/config/versatile_proxy.yaml")
+# 配置文件加载优先级：
+# 1. VersatileAdapterRunner(config_path=...) 显式参数
+# 2. 环境变量 VERSATILE_PROXY_CONFIG_PATH
+# 3. 部署默认路径 /etc/edpagent/config/versatile_proxy.yaml
+# 4. 当前 versatile_adapter 目录下的 versatile_proxy.yaml（便于本地开发）
+_DEPLOY_DEFAULT_CONFIG_PATH = Path("/etc/edpagent/config/versatile_proxy.yaml")
+_LOCAL_DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent.parent / "versatile_proxy.yaml"
+
+
+def _resolve_default_config_path() -> Path:
+    env_path = os.environ.get("VERSATILE_PROXY_CONFIG_PATH")
+    if env_path:
+        return Path(env_path)
+    if _DEPLOY_DEFAULT_CONFIG_PATH.exists():
+        return _DEPLOY_DEFAULT_CONFIG_PATH
+    return _LOCAL_DEFAULT_CONFIG_PATH
+
+
+def _merge_workflow_defaults(raw: dict, workflow_defaults: dict) -> dict:
+    if raw.get("type") != "workflow":
+        return raw
+
+    merged = {**workflow_defaults, **raw}
+    default_headers = workflow_defaults.get("headers_template") or {}
+    adapter_headers = raw.get("headers_template") or {}
+    if default_headers or adapter_headers:
+        merged["headers_template"] = {**default_headers, **adapter_headers}
+    return merged
 
 
 class _VersatileAdapterConfig:
@@ -54,7 +82,7 @@ class VersatileAdapterRunner:
     """配置驱动的动态路由 Runner。"""
 
     def __init__(self, config_path: Optional[Path] = None) -> None:
-        path = config_path or _DEFAULT_CONFIG_PATH
+        path = config_path or _resolve_default_config_path()
         self._adapters = self._load_config(path)
         if not self._adapters:
             self._adapters = self._build_from_settings()
@@ -70,9 +98,13 @@ class VersatileAdapterRunner:
             logger.warning(f"[VersatileAdapterRunner] 配置文件不存在: {path}，将从 Settings 生成")
             return []
         with open(path, encoding="utf-8") as f:
-            raw = yaml.safe_load(f)
+            raw = yaml.safe_load(f) or {}
+        workflow_defaults = raw.get("workflow_defaults", {})
         adapters_raw = raw.get("adapters", [])
-        return [_VersatileAdapterConfig(b) for b in adapters_raw]
+        return [
+            _VersatileAdapterConfig(_merge_workflow_defaults(b, workflow_defaults))
+            for b in adapters_raw
+        ]
 
     @staticmethod
     def _build_from_settings() -> list[_VersatileAdapterConfig]:
@@ -118,6 +150,7 @@ class VersatileAdapterRunner:
                 timeout=cfg.timeout,
                 headers_template=cfg.headers_template,
                 forward_header_whitelist=whitelist,
+                workflow_result_node=cfg.workflow_result_node,
             )
         return VersatileController(
             url_template=cfg.url_template,

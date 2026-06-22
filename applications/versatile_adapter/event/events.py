@@ -28,9 +28,10 @@ class ExecutionInputRequiredContent(BaseModel, frozen=True):
 
 
 class ExecutionCompletedContent(BaseModel, frozen=True):
-    """终态信号：任务完成并携带工作流结果。"""
+    """终态信号：任务完成并携带工作流结果或错误详情。"""
     is_failed: bool = False
-    result: str
+    result: str = ""
+    error_message: str = ""
 
 
 class AdapterEvent(BaseModel):

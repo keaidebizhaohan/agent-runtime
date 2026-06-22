@@ -39,6 +39,7 @@ adapters:
     timeout: 30
     workflow_id: wf_knowledge_qa
     intent: knowledge_qa
+    workflow_result_node: WorkflowQAResponseNode
     forward_header_whitelist:
       - x-trace-id
 
@@ -48,6 +49,7 @@ adapters:
     timeout: 30
     workflow_id: wf_wealth
     intent: "理财推荐"
+    workflow_result_node: WealthQAResponseNode
 """
 
 

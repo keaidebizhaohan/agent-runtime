@@ -10,6 +10,7 @@ End/exception 终态检测、GXZQAResponseNode 过滤。
 from __future__ import annotations
 
 import json as _json
+import re
 from typing import Optional
 
 from loguru import logger
@@ -46,15 +47,16 @@ class VersatileController(VersatileProxy):
         self._workflow_result_node = workflow_result_node
 
     def _process_chunk(self, chunk: str, ctx: VersatileStreamCtx) -> list[AdapterEvent]:
-        if '"node_type":"End"' in chunk:
+        if re.search(r'"node_type"\s*:\s*"End"', chunk):
             logger.debug(f"[VersatileController] End 节点，yield data_proxy")
             ctx.completed = True
             return [AdapterEvent(data_proxy=DataProxyContent(raw_data=chunk))]
 
-        if '"event":"exception"' in chunk:
+        if re.search(r'"event"\s*:\s*"exception"', chunk):
             logger.debug(f"[VersatileController] exception 帧，yield data_proxy")
             ctx.completed = True
             ctx.is_failed = True
+            ctx.error_message = chunk
             return [AdapterEvent(data_proxy=DataProxyContent(raw_data=chunk))]
 
         if self._workflow_result_node and f'"node_name":"{self._workflow_result_node}"' in chunk:
@@ -78,9 +80,11 @@ class VersatileController(VersatileProxy):
         if not ctx.completed:
             return [AdapterEvent(execution_input_required=ExecutionInputRequiredContent())]
 
-        if ctx.execution_result:
+        if ctx.is_failed or ctx.execution_result:
             return [AdapterEvent(execution_completed=ExecutionCompletedContent(
-                is_failed=ctx.is_failed, result=ctx.execution_result
+                is_failed=ctx.is_failed,
+                result=ctx.execution_result or "",
+                error_message=ctx.error_message,
             ))]
 
         return []

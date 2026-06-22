@@ -231,7 +231,19 @@ class TestControllerProcessChunk:
         events = ctrl._process_chunk(chunk, ctx)
         assert ctx.completed is True
         assert ctx.is_failed is True
+        assert ctx.error_message == chunk
         # exception 帧也需要转发前端
+        assert len(events) == 1
+
+    @staticmethod
+    def test_error_event_passes_through_without_terminating():
+        ctrl = VersatileController("http://h/")
+        ctx = VersatileStreamCtx()
+        chunk = '{"event": "error", "data": {"message": "err"}}'
+        events = ctrl._process_chunk(chunk, ctx)
+        assert ctx.completed is False
+        assert ctx.is_failed is False
+        assert ctx.error_message == ""
         assert len(events) == 1
 
     @staticmethod
@@ -248,14 +260,29 @@ class TestControllerProcessChunk:
         assert ctx.execution_result == "compact"
 
     @staticmethod
+    def test_workflow_result_node_decodes_json_escaped_text():
+        """workflow_result text 通过 JSON 解析提取，需还原引号、换行和 Unicode 转义。"""
+        ctrl = VersatileController("http://h/", workflow_result_node="GXZQAResponseNode")
+        ctx = VersatileStreamCtx()
+        expected = '他说"你好"\n下一行'
+        chunk = json.dumps(
+            {"data": {"node_type": "QA", "node_name": "GXZQAResponseNode", "text": expected}},
+            separators=(",", ":"),
+        )
+        events = ctrl._process_chunk(chunk, ctx)
+        assert events == []
+        assert ctx.execution_result == expected
+
+    @staticmethod
     def test_workflow_result_node_unparseable_json_falls_through():
-        """识别到 node_name 但 JSON 无法解析 → fall back 到 data_proxy 透传。"""
+        """识别到 node_name 但 JSON 无法解析时，fall back 到 data_proxy 透传。"""
         ctrl = VersatileController("http://h/", workflow_result_node="GXZQAResponseNode")
         ctx = VersatileStreamCtx()
         chunk = '{not-valid-json "node_name":"GXZQAResponseNode"'
         events = ctrl._process_chunk(chunk, ctx)
         assert len(events) == 1
         assert events[0].data_proxy is not None
+        assert ctx.execution_result is None
 
     @staticmethod
     def test_other_qa_node_passes_through():
@@ -328,6 +355,18 @@ class TestControllerOnStreamEnd:
         assert events[0].execution_completed.result == "exception-detail"
 
     @staticmethod
+    def test_completed_failed_no_result_uses_error_message(ctrl):
+        ctx = VersatileStreamCtx()
+        ctx.completed = True
+        ctx.is_failed = True
+        ctx.error_message = "raw-error"
+        events = ctrl._on_stream_end(ctx)
+        assert len(events) == 1
+        assert events[0].execution_completed.is_failed is True
+        assert events[0].execution_completed.result == ""
+        assert events[0].execution_completed.error_message == "raw-error"
+
+    @staticmethod
     def test_completed_no_result_yields_nothing(ctrl):
         """End 节点完成但未提取到 workflow_result：不产 execution_completed。"""
         ctx = VersatileStreamCtx()
@@ -352,6 +391,7 @@ class TestWorkflowProcessChunk:
         ctx = VersatileStreamCtx()
         chunk = f'{{"type":"{skip_type}","data":{{"content":"x"}}}}'
         assert wf._process_chunk(chunk, ctx) == []
+        assert ctx.completed is (skip_type in {"finish", "runCompleted"})
 
     @staticmethod
     @pytest.mark.parametrize("kept_type", ["rawData", "nodeType", "text", "answer", "message"])
@@ -371,9 +411,73 @@ class TestWorkflowProcessChunk:
         assert wf._process_chunk(chunk, ctx) == []
 
     @staticmethod
-    def test_workflow_on_stream_end_yields_nothing(wf):
-        """VersatileWorkflow._on_stream_end 始终返回 []（不产 execution_input_required）。"""
-        assert wf._on_stream_end(VersatileStreamCtx()) == []
+    def test_workflow_on_stream_end_not_completed_yields_input_required(wf):
+        ctx = VersatileStreamCtx()
+        events = wf._on_stream_end(ctx)
+        assert len(events) == 1
+        assert events[0].execution_input_required is not None
+
+    @staticmethod
+    def test_workflow_on_stream_end_completed_no_result_yields_nothing(wf):
+        ctx = VersatileStreamCtx()
+        ctx.completed = True
+        assert wf._on_stream_end(ctx) == []
+
+    @staticmethod
+    def test_workflow_error_event_passes_through_without_terminating(wf):
+        ctx = VersatileStreamCtx()
+        chunk = '{"event":"error","data":{"message":"workflow failed"}}'
+        events = wf._process_chunk(chunk, ctx)
+        assert ctx.completed is False
+        assert ctx.is_failed is False
+        assert ctx.error_message == ""
+        assert len(events) == 1
+
+        completed = wf._on_stream_end(ctx)
+        assert len(completed) == 1
+        assert completed[0].execution_input_required is not None
+
+    @staticmethod
+    def test_workflow_result_node_extracted():
+        wf = VersatileWorkflow(
+            "http://h/{workflow_id}/{conversation_id}",
+            "wf-1",
+            workflow_result_node="WorkflowQAResponseNode",
+        )
+        ctx = VersatileStreamCtx()
+        chunk = json.dumps({
+            "data": {
+                "node_type": "QA",
+                "node_name": "WorkflowQAResponseNode",
+                "text": "workflow answer",
+            }
+        }, separators=(",", ":"))
+        assert wf._process_chunk(chunk, ctx) == []
+        assert ctx.execution_result == "workflow answer"
+
+        ctx.completed = True
+        completed = wf._on_stream_end(ctx)
+        assert len(completed) == 1
+        assert completed[0].execution_completed.result == "workflow answer"
+
+    @staticmethod
+    def test_workflow_result_node_decodes_json_escaped_text():
+        wf = VersatileWorkflow(
+            "http://h/{workflow_id}/{conversation_id}",
+            "wf-1",
+            workflow_result_node="WorkflowQAResponseNode",
+        )
+        ctx = VersatileStreamCtx()
+        expected = '他说"你好"\n下一行'
+        chunk = json.dumps({
+            "data": {
+                "node_type": "QA",
+                "node_name": "WorkflowQAResponseNode",
+                "text": expected,
+            }
+        }, separators=(",", ":"))
+        assert wf._process_chunk(chunk, ctx) == []
+        assert ctx.execution_result == expected
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -388,6 +492,7 @@ class TestStreamCtx:
         assert ctx.completed is False
         assert ctx.is_failed is False
         assert ctx.execution_result is None
+        assert ctx.error_message == ""
 
     @staticmethod
     def test_multiple_chunks_accumulate():

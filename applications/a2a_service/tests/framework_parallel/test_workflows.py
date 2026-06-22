@@ -14,9 +14,12 @@ from __future__ import annotations
 
 import asyncio
 
-from common.events import MultiDelegateRequest, WorkflowSpec
+from google.protobuf.json_format import MessageToDict
+
+from common.events import DelegateRequest, MultiDelegateRequest, WorkflowSpec
 
 from tests.framework_parallel._helpers import (
+    FakeAsyncStream,
     collect_sub_tasks,
     make_executor,
     make_turn_ctx,
@@ -127,6 +130,22 @@ async def test_run_one_workflow_failure_isolated():
     assert envs[-1]["sub_task_path"] == ["A", "wf:c"]
 
 
+async def test_run_one_workflow_no_terminal_result_marks_failed():
+    """问题 2：VA 流未给出任何终态（final_result is None）→ 判 failed，不静默 done。"""
+    executor = make_executor()
+    _set_fake_va(executor, returns=None)
+    ctx = make_turn_ctx(sub_task_path=("A",))
+
+    result = await executor._run_one_workflow(_wfs("wf:n")[0], ctx, asyncio.Event())
+
+    assert result["status"] == "failed"
+    assert result["result"] is None
+    assert "未返回终态" in result["error"]
+    envs = collect_sub_tasks(ctx.event_queue)
+    assert envs[-1]["data"]["event"] == "node_end"
+    assert envs[-1]["data"]["status"] == "failed"
+
+
 async def test_run_one_workflow_timeout():
     executor = make_executor(workflow_timeout_seconds=0.05)
     _set_fake_va(executor, returns={"url": "late"}, sleep=1)
@@ -152,3 +171,74 @@ async def test_run_one_workflow_cancelled():
     assert result["status"] == "cancelled"
     envs = collect_sub_tasks(ctx.event_queue)
     assert envs[-1]["data"]["status"] == "cancelled"
+
+
+# ════════════════════════════════════════════════════════════════════
+# 并行委托 → VA 请求构造：intent 改写对齐 + target 仅用 intent 路由（决策 a/b）
+# 这两个用例**不 stub** _drive_workflow_va，直接驱动真实函数体并捕获发往 VA 的请求。
+# ════════════════════════════════════════════════════════════════════
+
+
+def _capture_va_request(executor) -> dict:
+    """让真实 _drive_workflow_va 跑起来：捕获发往 VA 的 SendMessageRequest，返回空流。"""
+    captured: dict = {}
+
+    def send_message(request):
+        captured["request"] = request
+        return FakeAsyncStream([])  # 空流 → async for 直接结束，请求已在迭代前构造
+
+    executor._va_client.send_message = send_message
+    return captured
+
+
+def _va_data_part(request) -> dict:
+    """从 SendMessageRequest 的 DataPart 还原 dict（target/headers/body/params/...）。"""
+    for part in request.message.parts:
+        if part.WhichOneof("content") == "data":
+            return MessageToDict(part.data)
+    return {}
+
+
+def _va_text_part(request) -> str:
+    for part in request.message.parts:
+        if part.WhichOneof("content") == "text":
+            return part.text
+    return ""
+
+
+async def test_drive_workflow_va_rewrites_intent_and_omits_workflow_id():
+    """决策 a：推荐入口改写生效，body 入参与 target 的 intent 一致；
+    决策 b：target 只用 intent 路由，不含模型生成的局部 workflow_id（wf_path[-1]）。"""
+    executor = make_executor()
+    captured = _capture_va_request(executor)
+    ctx = make_turn_ctx(sub_task_path=("A",))
+    delegate = DelegateRequest(intent="理财推荐", task_description="推荐理财产品")
+
+    await executor._drive_workflow_va(delegate, ctx, ("A", "wf-1"), asyncio.Event())
+
+    data = _va_data_part(captured["request"])
+    # 决策 a：理财推荐 → 理财选品购买；query → 请推荐低风险理财产品（body 与 target 一致）
+    assert data["target"]["intent"] == "理财选品购买"
+    assert data["body"]["input"]["intent"] == "理财选品购买"
+    assert data["body"]["input"]["query"] == "请推荐低风险理财产品"
+    assert data["body"]["custom_data"]["inputs"]["intent"] == "理财选品购买"
+    assert _va_text_part(captured["request"]) == "请推荐低风险理财产品"
+    # 决策 b：target 不含 workflow_id（wf_path[-1]="wf-1" 仅用于节点盖章，不进路由）
+    assert data["target"]["type"] == "workflow"
+    assert "workflow_id" not in data["target"]
+
+
+async def test_drive_workflow_va_passthrough_intent_no_rewrite():
+    """非改写 intent：body 与 target 用原始 intent；仍不含 workflow_id，
+    且 _build_va_message 注入 conversation_id。"""
+    executor = make_executor()
+    captured = _capture_va_request(executor)
+    ctx = make_turn_ctx(conv_id="c", sub_task_path=("A",))
+    delegate = DelegateRequest(intent="转账", task_description="给张三转100")
+
+    await executor._drive_workflow_va(delegate, ctx, ("A", "wf-9"), asyncio.Event())
+
+    data = _va_data_part(captured["request"])
+    assert data["target"] == {"type": "workflow", "intent": "转账", "conversation_id": "c"}
+    assert data["body"]["input"]["intent"] == "转账"
+    assert data["body"]["input"]["query"] == "给张三转100"

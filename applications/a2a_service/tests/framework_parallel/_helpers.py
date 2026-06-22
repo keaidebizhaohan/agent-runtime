@@ -46,6 +46,7 @@ from a2a.types.a2a_pb2 import (
     ROLE_AGENT,
     TASK_STATE_CANCELED,
     TASK_STATE_COMPLETED,
+    TASK_STATE_FAILED,
     TASK_STATE_WORKING,
 )
 from google.protobuf.json_format import MessageToDict
@@ -125,6 +126,18 @@ def sr_artifact(frame: dict) -> StreamResponse:
 
 def sr_completed_text(text: str) -> StreamResponse:
     return StreamResponse(status_update=status_completed_text(text))
+
+
+def sr_failed(text: str = "") -> StreamResponse:
+    """子 Agent FAILED 终态帧（error 文本走 status.message）。"""
+    parts = [Part(text=text)] if text else []
+    msg = Message(role=ROLE_AGENT, message_id="m", parts=parts) if parts else None
+    su = TaskStatusUpdateEvent(
+        task_id="t", context_id="c",
+        status=TaskStatus(state=TASK_STATE_FAILED, message=msg) if msg
+        else TaskStatus(state=TASK_STATE_FAILED),
+    )
+    return StreamResponse(status_update=su)
 
 
 # ════════════════════════════════════════════════════════════════════

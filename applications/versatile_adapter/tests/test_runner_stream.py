@@ -189,8 +189,7 @@ async def test_controller_flow_exception_marks_failed(write_yaml):
     sse_lines = [
         'data: {"event":"exception","data":{"message":"运行时错误"}}',
     ]
-    # 注意：workflow_result_node 未命中 → ctx.execution_result=None
-    # _on_stream_end: completed=True, execution_result=None → 返回空 []
+    # workflow_result_node 未命中，但 exception 会在流结束时产出 failed completed 事件
     with _patch_httpx(sse_lines):
         events = []
         async for ev in runner.run_async(
@@ -201,10 +200,15 @@ async def test_controller_flow_exception_marks_failed(write_yaml):
         ):
             events.append(ev)
 
-    # exception 帧本身作为 data_proxy 转发
+    # exception 帧本身作为 data_proxy 转发，流结束补 failed completed
     data_events = [e for e in events if e.data_proxy is not None]
     assert len(data_events) == 1
     assert '"event":"exception"' in data_events[0].data_proxy.raw_data
+    completed = [e for e in events if e.execution_completed is not None]
+    assert len(completed) == 1
+    assert completed[0].execution_completed.is_failed is True
+    assert completed[0].execution_completed.result == ""
+    assert '"event":"exception"' in completed[0].execution_completed.error_message
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -237,6 +241,34 @@ async def test_workflow_intent_matched_skips_filtered_types(write_yaml):
     # 5 帧输入 → 2 帧透传（rawData + text）
     data_events = [e for e in events if e.data_proxy is not None]
     assert len(data_events) == 2
+
+
+@pytest.mark.asyncio
+async def test_workflow_flow_with_workflow_result_node(write_yaml):
+    """workflow adapter：命中自身 workflow_result_node 时提取结果并在 finish 后 completed。"""
+    runner = VersatileAdapterRunner(config_path=write_yaml())
+    sse_lines = [
+        'data: {"type":"text","data":{"content":"processing"}}',
+        'data: {"data":{"node_type":"QA","node_name":"WorkflowQAResponseNode","text":"工作流答案"}}',
+        'data: {"type":"finish","data":{"content":""}}',
+    ]
+
+    with _patch_httpx(sse_lines):
+        events = []
+        async for ev in runner.run_async(
+            target={"intent": "knowledge_qa", "conversation_id": "c-2"},
+            headers={},
+            params={},
+            body={"custom_data": {}},
+        ):
+            events.append(ev)
+
+    data_events = [e for e in events if e.data_proxy is not None]
+    assert len(data_events) == 1
+    completed = [e for e in events if e.execution_completed is not None]
+    assert len(completed) == 1
+    assert completed[0].execution_completed.is_failed is False
+    assert completed[0].execution_completed.result == "工作流答案"
 
 
 @pytest.mark.asyncio

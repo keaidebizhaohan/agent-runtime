@@ -89,12 +89,15 @@ class A2aVersatileExecutor(AgentExecutor):
 
                     elif event.execution_completed is not None:
                         is_failed = event.execution_completed.is_failed
-                        if event.execution_completed.result:
+                        if event.execution_completed.error_message:
+                            part = self._make_text_part(event.execution_completed.error_message, "upstream_error")
+                            message = new_message(parts=[part])
+                        elif event.execution_completed.result:
                             part = self._make_text_part(event.execution_completed.result, "workflow_result")
                             message = new_message(parts=[part])
 
                 if is_failed:
-                    await updater.failed()
+                    await updater.failed(message)
                     logger.info(f"[A2aVA] 流异常结束(failed): conv_id={context.context_id}, task_id={context.task_id}")
                 else:
                     await updater.complete(message)
