@@ -79,6 +79,8 @@ class Access(IAccess):
         self._config: Optional[AccessConfig] = None
         self._service_configs: Optional[list[dict[str, Any]]] = None
         self._shutdown_done: bool = False
+        # 保护 update_config 的切换阶段，确保原子性
+        self._update_lock = asyncio.Lock()
 
     async def init(
             self,
@@ -161,32 +163,44 @@ class Access(IAccess):
             self, config: Optional[AccessConfig] = None, session_config: Optional[SessionConfig] = None,
             strategy: Optional[ISessionStrategy] = None,
     ) -> None:
-        """运行时热更新配置。创建新的 ServiceManager，异步停止旧的 ServiceManager。"""
-        logger.info("Access 开始热更新配置，将创建新 ServiceManager 并异步停止旧实例")
+        """运行时热更新配置。创建新的 ServiceManager，异步停止旧的 ServiceManager。
         
-        # 记录旧的 ServiceManager（用于后续清理）
-        old_sm = self._service_manager
+        使用优化的串行化策略：
+        - 在锁外并行创建和启动新 SM（最大化并发性能）
+        - 持锁时原子切换引用并清理旧 SM
+        - 虽然串行执行切换，但创建阶段可并行，总体延迟更低
         
-        # 先创建新的 ServiceManager（避免服务中断）
+        注意：由于 ServiceManager 是有状态的（包含运行中的服务实例），
+        必须保证切换的原子性，避免中间版本泄漏。
+        """
+        # 阶段1：在锁外创建并启动新 SM（可与其他 update_config 的创建阶段并发）
+        logger.info("Access 开始热更新配置，正在创建新 ServiceManager...")
         new_sm = await self._service_manager_factory()
-        # 初始化并启动新 ServiceManager
         await new_sm.init(self._response_parser)
         await new_sm.start()
+        logger.info("新 ServiceManager 已启动，准备切换")
         
-        # 切换到新的 ServiceManager
-        self._service_manager = new_sm
+        # 阶段2：原子切换（持锁，但时间极短）
+        async with self._update_lock:
+            # 读取当前的 ServiceManager
+            old_sm = self._service_manager
+            
+            # 切换到新的 ServiceManager
+            self._service_manager = new_sm
+            
+            # 更新配置
+            if config:
+                self._config = config
+            if strategy:
+                self._strategy = strategy
+            if session_config and self._strategy:
+                self._strategy.configure(session_config.concurrency, session_config.ttl)
+            
+            logger.info("Access 配置已热更新, strategy=%s", type(self._strategy).__name__ if self._strategy else None)
         
-        # 更新配置
-        if config:
-            self._config = config
-        if strategy:
-            self._strategy = strategy
-        if session_config and self._strategy:
-            self._strategy.configure(session_config.concurrency, session_config.ttl)
-        
-        logger.info("Access 配置已热更新, strategy=%s", type(self._strategy).__name__ if self._strategy else None)
-        
-        # 异步停止旧的 ServiceManager（不阻塞新服务）
+        # 阶段3：异步清理旧 SM（不持锁，不阻塞后续请求）
+        if old_sm:
+            asyncio.create_task(self._graceful_stop_old_service_manager(old_sm))
         if old_sm:
             asyncio.create_task(self._graceful_stop_old_service_manager(old_sm))
     
