@@ -171,6 +171,13 @@ class DockerDeployer(Deployer[DockerParams]):
             proxy_env_filtered = {k: v for k, v in proxy_env.items() if v}
             # Merge proxy env with custom env, custom env has higher priority
             env_vars = {**proxy_env_filtered, **env_vars}
+            # link-auth：透传控制面的链路握手鉴权开关给 AgentServer 容器（容器不继承宿主
+            # 环境）；显式 env 优先，故用 setdefault。enforce 下若缺，pod 不签 ack 令牌、
+            # Gateway 反向校验失败。
+            for _link_env in ("CLAW_LINK_AUTH_MODE", "CLAW_LINK_TOKEN_TTL"):
+                _link_val = os.getenv(_link_env)
+                if _link_val:
+                    env_vars.setdefault(_link_env, _link_val)
 
             # 非低码情况
             if not ir_path:

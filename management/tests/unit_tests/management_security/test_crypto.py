@@ -9,7 +9,7 @@ import pytest
 from cryptography.exceptions import InvalidTag
 
 from openjiuwen_runtime.management.security import EnvelopeCryptoProvider, SealedMessage
-from openjiuwen_runtime.management.security._primitives import x25519_generate
+from openjiuwen_runtime.foundation.security._primitives import x25519_generate
 
 
 def test_envelope_seal_open_roundtrip():

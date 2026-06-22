@@ -539,6 +539,13 @@ class K8sDeployer(Deployer[K8sParams]):
             }
             if settings.userdata:
                 env_vars["RUNTIME_USERDATA"] = settings.userdata
+            # link-auth：把控制面的链路握手鉴权开关透传给 AgentServer pod。k8s pod 不继承
+            # 宿主/控制面环境，须显式注入；否则 enforce 模式下 pod 不会签 connection.ack
+            # 反向令牌，Gateway 侧反向校验将失败、握手建立不起来。
+            for _link_env in ("CLAW_LINK_AUTH_MODE", "CLAW_LINK_TOKEN_TTL"):
+                _link_val = os.getenv(_link_env)
+                if _link_val:
+                    env_vars[_link_env] = _link_val
 
             core_api, apps_api = await self._get_apis()
             secret_body = self._build_secret_body(

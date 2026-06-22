@@ -14,7 +14,7 @@ from openjiuwen_runtime.management.security import (
     client_key_exchange,
     server_key_exchange,
 )
-from openjiuwen_runtime.management.security._primitives import (
+from openjiuwen_runtime.foundation.security._primitives import (
     ed25519_generate,
     fingerprint,
     x25519_generate,

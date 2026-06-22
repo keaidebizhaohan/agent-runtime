@@ -86,6 +86,8 @@ class WSServiceMessageChannel:
             ws_use_tls: bool = False,
             payload_from_raw: Optional[PayloadBuilder] = None,
             connect_timeout: float = 30.0,
+            additional_headers: Optional[Any] = None,
+            verify_peer: Optional[Callable[[dict], bool]] = None,
     ) -> None:
         self._fallback_port = int(target_port) if target_port is not None else None
         self._port = self._fallback_port or 0
@@ -96,6 +98,15 @@ class WSServiceMessageChannel:
                 payload_from_raw or serialize_request_payload
         )
         self._connect_timeout = connect_timeout
+        # 可选：握手期附加的 HTTP 头（如链路鉴权令牌）。
+        # 可传 dict（静态），或无参回调 ``() -> Optional[dict]``（每次连接现取，
+        # 用于令牌需逐次刷新的场景，避免重连复用同一令牌被对端的 nonce/有效期校验拦截）。
+        # 默认 None=不附加，行为与既有调用方完全一致。
+        self._additional_headers: Optional[Any] = additional_headers
+        # 可选：对端核验回调 ``(connection_ack_frame: dict) -> bool``。设置后，连接建立即
+        # 消费首帧 connection.ack 交其核验（如反向链路鉴权：确认连到的是合法对端），返回
+        # False 则断开。默认 None=不核验，行为与既有调用方完全一致。
+        self._verify_peer: Optional[Callable[[dict], bool]] = verify_peer
 
         # 强引用：接收循环须稳定持有 ServiceHandler 以 dispatch；弱引用在部分 GC/嵌入场景下
         # 可能在 recv 首帧前失效，导致接收协程空跑退出、全链路无下行（表现为「能连上但不转发」）。
@@ -209,15 +220,28 @@ class WSServiceMessageChannel:
             if not self._ws_url:
                 raise RuntimeError("WebSocket URL 未设置")
             logger.info("WSS 正在连接: %s", self._ws_url)
+            # dict 直接用；回调则每次连接现取一份（如刷新链路令牌：新 nonce/新签发时间）。
+            hdrs = self._additional_headers
+            if callable(hdrs):
+                hdrs = hdrs()
             new_ws = await asyncio.wait_for(
                 websockets.connect(
                     self._ws_url,
                     open_timeout=self._connect_timeout,
                     ping_interval=20.0,
                     ping_timeout=20.0,
+                    additional_headers=hdrs,
                 ),
                 timeout=self._connect_timeout,
             )
+            # link-auth 反向：消费首帧 connection.ack 并核验对端令牌；不通过则断开。
+            if self._verify_peer is not None:
+                first_raw = await asyncio.wait_for(new_ws.recv(), timeout=self._connect_timeout)
+                first = _decode_ws_message(first_raw)
+                if not self._verify_peer(first if isinstance(first, dict) else {}):
+                    with contextlib.suppress(Exception):
+                        await new_ws.close()
+                    raise RuntimeError("WSS 对端 link-auth 校验失败")
             self._ws = new_ws
             p = self._default_parser
             if p is not None and (self._recv_task is None or self._recv_task.done()):

@@ -17,10 +17,9 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 from openjiuwen_runtime.foundation.db.handler import DBHandler
-
-from . import _primitives as _p
-from .interfaces import ICertificateManager
-from .models import (
+from openjiuwen_runtime.foundation.security import _primitives as _p
+from openjiuwen_runtime.foundation.security.interfaces import ICertificateManager
+from openjiuwen_runtime.foundation.security.models import (
     EncAlgorithm,
     KeyPair,
     KeyPurpose,

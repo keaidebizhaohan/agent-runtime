@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import subprocess
 import sys
@@ -159,10 +160,11 @@ class ProcessServiceHandler:
         return info
 
     async def _wait_until_ready(self) -> None:
-        import websockets
-
+        # 探活仅需确认 AgentServer 的监听端口已就绪，故用 TCP 连接探测而非
+        # WebSocket 握手——这与 K8s 的 TCP readiness 探针语义一致，且不会触发
+        # 链路握手鉴权：enforce 模式下，不带 X-Claw-Link-Token 的 WS 握手会被
+        # AgentServer 拒绝（401），令探活永远失败。TCP 探测则不涉及握手鉴权。
         deadline = asyncio.get_running_loop().time() + self._ready_timeout
-        url = f"ws://{self._host}:{self._port}"
         last_error: Exception | None = None
 
         while asyncio.get_running_loop().time() < deadline:
@@ -172,14 +174,21 @@ class ProcessServiceHandler:
                     f"AgentServer process exited early with code {proc.returncode}"
                 )
             try:
-                async with websockets.connect(url, open_timeout=2.0):
-                    return
+                _, writer = await asyncio.wait_for(
+                    asyncio.open_connection(self._host, self._port),
+                    timeout=2.0,
+                )
+                writer.close()
+                with contextlib.suppress(Exception):
+                    await writer.wait_closed()
+                return
             except Exception as exc:  # noqa: BLE001
                 last_error = exc
                 await asyncio.sleep(self._ready_poll_interval)
 
         raise TimeoutError(
-            f"AgentServer not ready within {self._ready_timeout}s url={url} last_error={last_error}"
+            f"AgentServer not ready within {self._ready_timeout}s "
+            f"host={self._host} port={self._port} last_error={last_error}"
         )
 
     async def delete(self) -> str:

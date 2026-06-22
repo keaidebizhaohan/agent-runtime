@@ -13,7 +13,7 @@ from openjiuwen_runtime.management.security import (
     make_signer,
     make_verifier,
 )
-from openjiuwen_runtime.management.security._primitives import ed25519_generate
+from openjiuwen_runtime.foundation.security._primitives import ed25519_generate
 
 
 def test_sign_verify_roundtrip():
