@@ -54,6 +54,9 @@ url = "https://mirrors.aliyun.com/pypi/simple/"
 where = ["."]
 exclude = ["*.egg-info", "tests"]
 include = ["openjiuwen_runtime*"]
+
+[tool.setuptools.package-data]
+"openjiuwen_runtime.foundation" = ["config/logging.yaml"]
 	 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
