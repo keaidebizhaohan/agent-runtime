@@ -175,8 +175,6 @@ class K8sServiceHandler:
             nfs_server: Optional[str] = None,  # NFS 服务器地址
             nfs_path: Optional[str] = None,  # NFS 共享路径
             nfs_mount_path: Optional[str] = None,  # 容器内挂载路径
-            host_path: Optional[str] = None,  # 宿主机路径
-            host_mount_path: Optional[str] = None,  # hostPath 容器内挂载路径
             mode: str = "product",  # 运行环境模式：支持 dev / product 两种值
             node_name: Optional[str] = None,  # 强制调度到指定节点
     ):
@@ -200,8 +198,6 @@ class K8sServiceHandler:
         self._nfs_server = nfs_server
         self._nfs_path = nfs_path
         self._nfs_mount_path = nfs_mount_path
-        self._host_path = host_path
-        self._host_mount_path = host_mount_path
         self._mode = mode
         self._node_name = node_name
         self._pod_name: Optional[str] = None

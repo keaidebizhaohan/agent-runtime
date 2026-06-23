@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+from typing import Optional
 from urllib.parse import quote_plus
 
 from sqlalchemy import DateTime, text
@@ -30,6 +31,7 @@ class PostgreSQLHandler(SQLAlchemyHandler):
         host: str = "127.0.0.1",
         port: int = 5432,
         database: str = "claw_manager",
+        schema: str = "public",
         user: str = "postgres",
         password: str = "",
     ) -> None:
@@ -38,25 +40,39 @@ class PostgreSQLHandler(SQLAlchemyHandler):
         self.database = database
         self.user = user
         self.password = password
-
+        self.schema = schema
         database_url = (
             f"postgresql+asyncpg://{quote_plus(user)}:{quote_plus(password)}"
             f"@{host}:{port}/{database}"
         )
-        super().__init__(database_url)
+
+        connect_args = {}
+        if schema and schema.lower() != "public":
+            connect_args["server_settings"] = {
+                "search_path": schema
+            }
+
+        super().__init__(database_url, connect_args=connect_args)
 
     async def init_database(self) -> None:
-        """确保目标数据库存在（不存在则创建）。
+        self.database = (self.database or "").strip()
+        if not self.database:
+            logger.warning("No database name configured, skipping init_database")
+            return
 
+        # 确保数据库存在
+        await self._ensure_pg_db()
+
+        # 确保schema存在
+        await self._ensure_pg_schema()
+
+    async def _ensure_pg_db(self) -> None:
+        """确保目标数据库存在（不存在则创建）。
         PostgreSQL 不支持 ``CREATE DATABASE IF NOT EXISTS``，
         因此先连 ``postgres`` 默认库查询 ``pg_database``。
         注意 CREATE DATABASE 不能在事务中执行，需 AUTOCOMMIT。
         """
-        db_name = (self.database or "").strip()
-        if not db_name:
-            logger.warning("No database name configured, skipping init_database")
-            return
-
+        # 连接系统默认postgres库
         url = make_url(self.database_url)
         server_url = url.set(database="postgres")
         temp_engine = create_async_engine(
@@ -68,14 +84,44 @@ class PostgreSQLHandler(SQLAlchemyHandler):
             async with temp_engine.connect() as conn:
                 result = await conn.execute(
                     text("SELECT 1 FROM pg_database WHERE datname = :name"),
-                    {"name": db_name},
+                    {"name": self.database},
                 )
                 if result.scalar() is None:
-                    quoted = db_name.replace('"', '""')
+                    quoted = self.database.replace('"', '""')
                     await conn.execute(text(f'CREATE DATABASE "{quoted}"'))
-                    logger.info("PostgreSQL database created: database=%s", db_name)
+                    logger.info("PostgreSQL database created: database=%s", self.database)
                 else:
-                    logger.debug("PostgreSQL database already exists: database=%s", db_name)
+                    logger.debug("PostgreSQL database already exists: database=%s", self.database)
+        finally:
+            await temp_engine.dispose()
+
+    async def _ensure_pg_schema(self) -> None:
+        if not self.schema or self.schema.lower() == "public":
+            return
+
+        url = make_url(self.database_url)
+        server_url = url.set(database=self.database)
+        temp_engine = create_async_engine(
+            server_url.render_as_string(hide_password=False),
+            echo=False,
+            isolation_level="AUTOCOMMIT",
+        )
+        try:
+            async with temp_engine.connect() as conn:
+                result = await conn.execute(
+                    text(
+                        "SELECT 1 FROM information_schema.schemata "
+                        "WHERE schema_name = :schema"
+                    ),
+                    {"schema": self.schema},
+                )
+                if result.scalar() is None:
+                    # 安全转义双引号，规避标识符注入
+                    quoted_schema = self.schema.replace('"', '""')
+                    await conn.execute(text(f'CREATE SCHEMA "{quoted_schema}"'))
+                    logger.info("PostgreSQL schema created: schema=%s", self.schema)
+                else:
+                    logger.debug("PostgreSQL schema already exists: schema=%s", self.schema)
         finally:
             await temp_engine.dispose()
 
@@ -94,3 +140,4 @@ class PostgreSQLHandler(SQLAlchemyHandler):
         if col_def.data_type.lower() == "datetime":
             return "TIMESTAMP WITH TIME ZONE"
         return super()._get_column_sql_type(col_def)
+

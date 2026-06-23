@@ -29,8 +29,9 @@ class GenericRecord:
 class SQLAlchemyHandler(DBHandler):
     """SQLAlchemy基类实现"""
 
-    def __init__(self, database_url: str):
+    def __init__(self, database_url: str, connect_args: dict = None):
         self.database_url = database_url
+        self.connect_args = connect_args or {}
         self.engine = None
         self.session_factory = None
         self._table_models: dict[str, Any] = {}
@@ -44,7 +45,11 @@ class SQLAlchemyHandler(DBHandler):
         logger.info("Connecting to database")
         # 关闭 aiosqlite 的 DEBUG 日志
         logging.getLogger("aiosqlite").setLevel(logging.WARNING)
-        self.engine = create_async_engine(self.database_url, echo=False)
+        self.engine = create_async_engine(
+            self.database_url,
+            echo=False,
+            connect_args=self.connect_args
+        )
         self.session_factory = async_sessionmaker(
             self.engine, class_=AsyncSession, expire_on_commit=False
         )
@@ -55,6 +60,10 @@ class SQLAlchemyHandler(DBHandler):
         if self.engine:
             await self.engine.dispose()
         logger.info("Database disconnected")
+
+    def get_engine(self) -> Any:
+        """获取 SQLAlchemy AsyncEngine 实例."""
+        return self.engine
 
     def _get_sqlalchemy_type(self, data_type: str, length: Optional[int] = None):
         """将数据类型字符串转换为 SQLAlchemy 类型"""
