@@ -68,6 +68,18 @@ class ServiceRouter:
                 return True
             return False
 
+    async def delete_service_sessions(self, service_id: str) -> list[str]:
+        """删除所有绑定到指定 service_id 的 session 映射，并返回被删除的 session_id。"""
+        async with self._lock:
+            session_ids = [
+                session_id
+                for session_id, mapped_service_id in self._session_service.items()
+                if mapped_service_id == service_id
+            ]
+            for session_id in session_ids:
+                del self._session_service[session_id]
+            return session_ids
+
     async def clear(self) -> None:
         """清空 session_id → service_id 的亲和表（如进程退出/优雅停机）。"""
         async with self._lock:

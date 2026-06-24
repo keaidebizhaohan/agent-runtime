@@ -724,7 +724,7 @@ class K8sServiceHandler:
                 node_name = (pod.spec.node_name if pod.spec else None) or None
 
                 # 计算归一化状态
-                status, reason, message, restart_count = K8sServiceHandler._compute_pod_status(
+                status, reason, message, restart_count = K8sServiceHandler.compute_pod_status(
                     pod, phase, deletion_timestamp
                 )
 
@@ -756,7 +756,7 @@ class K8sServiceHandler:
             await api_client.close()
 
     @staticmethod
-    def _compute_pod_status(
+    def compute_pod_status(
         pod: client.V1Pod,
         phase: str,
         deletion_timestamp: Optional[str],

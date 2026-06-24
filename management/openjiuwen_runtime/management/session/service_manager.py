@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import asyncio
 from typing import Any, Dict, Optional, Set, Union
-from kubernetes_asyncio import config
+from kubernetes_asyncio import client, config, watch
 from kubernetes_asyncio.client.rest import ApiException
 
 from openjiuwen_runtime.foundation.log import get_logger
@@ -32,6 +32,18 @@ logger = get_logger(__name__)
 
 QueueItem = Union[RawMessage, ServiceReclaimEvent]
 
+FAILED_POD_STATUSES = {
+    "Terminating",
+    "Failed",
+    "Error",
+    "Terminated",
+    "CrashLoopBackOff",
+    "ImagePullBackOff",
+    "ErrImagePull",
+}
+POD_WATCH_TIMEOUT_SECONDS = 300
+POD_WATCH_RECONNECT_DELAY_SECONDS = 3.0
+
 
 class ServiceManager(IServiceManager):
     def __init__(
@@ -48,9 +60,10 @@ class ServiceManager(IServiceManager):
         service_templates: list[Dict[str, Any]] | None = None,
         # Pod 监控配置
         pod_monitor_enabled: bool = True,
-        pod_monitor_interval: float = 30.0,
+        pod_monitor_interval: float = 10.0,
         namespace: str = "default",
         kubeconfig: Optional[str] = None,
+        deploy_mode: str = "k8s",
     ) -> None:
         self._factory = service_factory
         self._q = dual_queue
@@ -66,6 +79,8 @@ class ServiceManager(IServiceManager):
         self._pod_monitor_interval = pod_monitor_interval
         self._namespace = namespace
         self._kubeconfig = kubeconfig
+        # 部署模式：仅 k8s 需要 Watch/轮询
+        self._deploy_mode = deploy_mode
 
         self._response_parser: Optional[IResponseParser] = None
         self._lock = asyncio.Lock()
@@ -80,6 +95,9 @@ class ServiceManager(IServiceManager):
         self._message_task: Optional[asyncio.Task[Any]] = None
         self._autoscale_task: Optional[asyncio.Task[Any]] = None
         self._pod_monitor_task: Optional[asyncio.Task[Any]] = None
+        self._pod_watch_task: Optional[asyncio.Task[Any]] = None
+        # 正在被失效 Pod 清理流程删除的 service_id，避免 watch/轮询/缩容/stop 之间重复 delete
+        self._deleting_services: set[str] = set()
         self._user_route_tasks: set[asyncio.Task[Any]] = set()
         # 已 arm「in_use → idle」计时的 service_id，避免对同一实例重复开多个计时器
         self._to_idle_timer_armed: set[str] = set()
@@ -141,10 +159,15 @@ class ServiceManager(IServiceManager):
         self._message_task = asyncio.create_task(self._message_loop())
         # 启动 autoscale 循环：定期检查并维护 min_idle、回收多余 idle 实例
         self._autoscale_task = asyncio.create_task(self._autoscale_loop())
-        # 启动 Pod 监控循环：定期检测失效 Pod 并清理绑定关系
-        if self._pod_monitor_enabled:
+        # 仅 k8s 部署模式下启动 Pod 监控循环：定期检测失效 Pod 并清理绑定关系
+        if self._pod_monitor_enabled and self._deploy_mode == "k8s":
             self._pod_monitor_task = asyncio.create_task(self._pod_monitor_loop())
-            logger.info("Pod 监控已启动: interval=%ss", self._pod_monitor_interval)
+            self._pod_watch_task = asyncio.create_task(self._pod_watch_loop())
+            logger.info(
+                "Pod 监控已启动: poll_interval=%ss watch_timeout=%ss",
+                self._pod_monitor_interval,
+                POD_WATCH_TIMEOUT_SECONDS,
+            )
         # 预拉热：根据模板配置拉起 min_idle 数量的空闲实例
         await self._bootstrap_min_idle()
         logger.info(
@@ -162,7 +185,12 @@ class ServiceManager(IServiceManager):
             self._running = False
             self._q.mark_closed()
             logger.info("ServiceManager 正在停止: 已标记队列关闭, 在途用户路由任务数=%s", len(self._user_route_tasks))
-            for t in (self._message_task, self._autoscale_task, self._pod_monitor_task):
+            for t in (
+                self._message_task,
+                self._autoscale_task,
+                self._pod_monitor_task,
+                self._pod_watch_task,
+            ):
                 if t and not t.done():
                     t.cancel()
                     try:
@@ -172,6 +200,7 @@ class ServiceManager(IServiceManager):
             self._message_task = None
             self._autoscale_task = None
             self._pod_monitor_task = None
+            self._pod_watch_task = None
             for ut in list(self._user_route_tasks):
                 if not ut.done():
                     ut.cancel()
@@ -182,6 +211,7 @@ class ServiceManager(IServiceManager):
             self._user_route_tasks.clear()
             self._to_idle_timer_armed.clear()
             self._excess_idle_timer_armed.clear()
+            self._deleting_services.clear()
             self._pending_expired_sessions.clear()
             try:
                 await self._timer.stop_all()
@@ -1126,6 +1156,10 @@ class ServiceManager(IServiceManager):
             self._pod_monitor_task.cancel()
             logger.debug("已取消 pod_monitor 任务")
 
+        if self._pod_watch_task and not self._pod_watch_task.done():
+            self._pod_watch_task.cancel()
+            logger.debug("已取消 pod_watch 任务")
+
     def is_deprecated(self) -> bool:
         """检查当前 ServiceManager 是否处于待老化状态。"""
         return self._deprecated
@@ -1188,7 +1222,7 @@ class ServiceManager(IServiceManager):
             return False
 
     async def _pod_monitor_loop(self) -> None:
-        """定期监测 Pod 状态并清理失效绑定（每 30 秒一次）。"""
+        """定期监测 Pod 状态并清理失效绑定。"""
         while self._running:
             try:
                 await asyncio.sleep(self._pod_monitor_interval)
@@ -1200,18 +1234,103 @@ class ServiceManager(IServiceManager):
                 break
             except (ApiException, config.ConfigException, OSError) as e:
                 logger.error("调用 Pod 监控接口失败: %s", e, exc_info=True)
-                return
+                #出错或断连后的“重试退避间隔”，防止异常时 CPU 空转和日志/请求风暴，同时保证循环能自愈继续跑。
+                await asyncio.sleep(POD_WATCH_RECONNECT_DELAY_SECONDS)
+
+    async def _pod_watch_loop(self) -> None:
+        """监听 K8s Pod 事件，收到删除或失效事件后立即同步清理绑定关系。"""
+        while self._running:
+            pod_watch = None
+            api_client = None
+            try:
+                await self._load_k8s_config()
+                api_client = client.ApiClient()
+                core = client.CoreV1Api(api_client)
+                pod_watch = watch.Watch()
+                logger.info(
+                    "Pod Watch 已启动: namespace=%s selector=%s",
+                    self._namespace,
+                    POD_LABEL_SELECTOR,
+                )
+                async for event in pod_watch.stream(
+                    core.list_namespaced_pod,
+                    namespace=self._namespace,
+                    label_selector=POD_LABEL_SELECTOR,
+                    timeout_seconds=POD_WATCH_TIMEOUT_SECONDS,
+                ):
+                    if not self._running:
+                        pod_watch.stop()
+                        break
+                    should_reconnect = await self._handle_pod_watch_event(event)
+                    if should_reconnect:
+                        pod_watch.stop()
+                        break
+            except asyncio.CancelledError:
+                logger.debug("Pod Watch 任务被取消")
+                if pod_watch is not None:
+                    pod_watch.stop()
+                break
+            except (ApiException, config.ConfigException, OSError) as e:
+                logger.error("Pod Watch 异常，将重连: %s", e, exc_info=True)
+            finally:
+                if pod_watch is not None:
+                    pod_watch.stop()
+                if api_client is not None:
+                    await api_client.close()
+
+            if self._running:
+                await asyncio.sleep(POD_WATCH_RECONNECT_DELAY_SECONDS)
+
+    async def _load_k8s_config(self) -> None:
+        """加载 K8s 访问配置，供 Watch 长连接使用。"""
+        try:
+            config.load_incluster_config()
+            logger.debug("K8s 已加载 in-cluster 配置（Watch）")
+        except config.ConfigException:
+            if self._kubeconfig:
+                await config.load_kube_config(config_file=self._kubeconfig)
+                logger.debug("K8s 已加载 kubeconfig: %s（Watch）", self._kubeconfig)
+            else:
+                await config.load_kube_config()
+                logger.debug("K8s 已加载默认 kubeconfig（Watch）")
+
+    async def _handle_pod_watch_event(self, event: Any) -> bool:
+        """处理单条 Pod Watch 事件；返回 True 表示当前 Watch 需要重连。"""
+        event_type = event.get("type") if isinstance(event, dict) else None
+        if event_type == "ERROR":
+            logger.warning("Pod Watch 收到 ERROR 事件，将重连: %s", event)
+            return True
+
+        pod = event.get("object") if isinstance(event, dict) else None
+        metadata = getattr(pod, "metadata", None)
+        pod_name = getattr(metadata, "name", None)
+        if not pod_name:
+            return False
+
+        if event_type == "DELETED":
+            await self._cleanup_dead_pods({pod_name: "Deleted"})
+            return False
+
+        if event_type != "MODIFIED":
+            return False
+
+        deletion_timestamp = getattr(metadata, "deletion_timestamp", None)
+        deletion_timestamp_text = deletion_timestamp.isoformat() if deletion_timestamp else None
+        phase = (getattr(getattr(pod, "status", None), "phase", None) or "Unknown")
+        status, reason, _message, _restart_count = K8sServiceHandler.compute_pod_status(
+            pod,
+            phase,
+            deletion_timestamp_text,
+        )
+        if deletion_timestamp_text or status in FAILED_POD_STATUSES:
+            detail = f"{status}: {reason or ''}".strip()
+            await self._cleanup_dead_pods({pod_name: detail})
+        return False
 
     async def _cleanup_failed_pods(self) -> None:
         """检测失效 Pod 并清理绑定关系。"""
         # 1. 收集所有需要监控的 Pod
-        pod_names_to_monitor: Set[str] = set()
-        async with self._lock:
-            for pool in [self._in_use, self._idle]:
-                for template_pool in pool.values():
-                    for h in template_pool.values():
-                        if hasattr(h, "pod_info") and h.pod_info:
-                            pod_names_to_monitor.add(h.pod_info.pod_name)
+        pod_names_to_monitor = await self._collect_managed_pod_names()
 
         if not pod_names_to_monitor:
             logger.debug("Pod 监控：当前无 Pod 需要监控")
@@ -1230,59 +1349,108 @@ class ServiceManager(IServiceManager):
             logger.error("调用 Pod 监控接口失败: %s", e, exc_info=True)
             return
 
-        # 3. 检测失效 Pod 并清理
-        failed_statuses = {
-            "Terminating",
-            "Failed",
-            "Error",
-            "Terminated",
-            "CrashLoopBackOff",
-            "ImagePullBackOff",
-            "ErrImagePull",
-        }
-
+        # 3. 检测失效或已从 K8s list 中消失的 Pod 并清理
         failed_pods: Dict[str, str] = {}  # pod_name -> reason
+        observed_pod_names = {pod.pod_name for pod in pod_statuses}
         for pod in pod_statuses:
-            if pod.pod_name in pod_names_to_monitor and pod.status in failed_statuses:
+            if pod.pod_name in pod_names_to_monitor and pod.status in FAILED_POD_STATUSES:
                 failed_pods[pod.pod_name] = f"{pod.status}: {pod.reason or ''}"
+        for pod_name in pod_names_to_monitor - observed_pod_names:
+            failed_pods[pod_name] = "NotFound: pod absent from Kubernetes list"
 
         if not failed_pods:
             logger.debug("Pod 监控：所有 Pod 状态正常")
             return
 
-        logger.warning("检测到失效 Pod: %s", failed_pods)
+        await self._cleanup_dead_pods(failed_pods)
 
-        # 4. 遍历所有 ServiceHandler 并清理
+    async def _collect_managed_pod_names(self) -> Set[str]:
+        """收集当前 ServiceManager 池中仍记录的 Pod 名称。"""
+        pod_names: Set[str] = set()
         async with self._lock:
             for pool in [self._in_use, self._idle]:
-                for template_id, template_pool in pool.items():
+                for template_pool in pool.values():
+                    for h in template_pool.values():
+                        if hasattr(h, "pod_info") and h.pod_info:
+                            pod_names.add(h.pod_info.pod_name)
+        return pod_names
+
+    async def _cleanup_dead_pods(self, dead_pods: Dict[str, str]) -> None:
+        """按 Pod 名称清理服务池、session 路由和 handler 状态。"""
+        if not dead_pods:
+            return
+
+        logger.debug("Pod 清理触发: candidates=%s", dead_pods)
+        handlers_to_delete: list[tuple[str, IServiceHandler, str, str, list[str]]] = []
+
+        async with self._lock:
+            for pool in [self._in_use, self._idle]:
+                for template_pool in pool.values():
                     for service_id, h in list(template_pool.items()):
                         if not hasattr(h, "pod_info") or not h.pod_info:
                             continue
+                        pod_name = h.pod_info.pod_name
+                        if pod_name not in dead_pods:
+                            continue
 
-                        if h.pod_info.pod_name in failed_pods:
-                            reason = failed_pods[h.pod_info.pod_name]
-                            logger.error(
-                                "Pod 已失效，移除 Service: service_id=%s pod_name=%s reason=%s",
+                        # 去重：watch/轮询/缩容/stop 可能并发命中同一实例，已在清理中的直接跳过
+                        if service_id in self._deleting_services:
+                            continue
+                        self._deleting_services.add(service_id)
+
+                        reason = dead_pods[pod_name]
+                        logger.error(
+                            "Pod 已失效，移除 Service: service_id=%s pod_name=%s reason=%s",
+                            service_id,
+                            pod_name,
+                            reason,
+                        )
+
+                        template_pool.pop(service_id, None)
+                        self._to_idle_timer_armed.discard(service_id)
+                        self._excess_idle_timer_armed.discard(service_id)
+
+                        router_session_ids = await self._service_router.delete_service_sessions(service_id)
+                        session_ids = sorted(set(h.open_session_ids()) | set(router_session_ids))
+                        for session_id in session_ids:
+                            self._pending_expired_sessions.pop(session_id, None)
+                            try:
+                                await h.remove_session(session_id)
+                            except Exception as e:
+                                logger.error(
+                                    "移除失效 Pod 的 Session 失败: service_id=%s session_id=%s err=%s",
+                                    service_id,
+                                    session_id,
+                                    e,
+                                    exc_info=True,
+                                )
+                            logger.info(
+                                "已移除失效 Pod 的 Session 绑定: session_id=%s service_id=%s",
+                                session_id,
                                 service_id,
-                                h.pod_info.pod_name,
-                                reason,
                             )
 
-                            # 清理所有绑定的 session
-                            for session_id in h.open_session_ids():
-                                await self._service_router.delete_session_service(session_id)
-                                logger.info(
-                                    "已移除失效 Pod 的 Session 绑定: session_id=%s", session_id
-                                )
+                        handlers_to_delete.append((service_id, h, pod_name, reason, session_ids))
 
-                            # 从池中移除
-                            template_pool.pop(service_id, None)
+        for service_id, h, pod_name, reason, session_ids in handlers_to_delete:
+            try:
+                for session_id in session_ids:
+                    await self._timer.cancel_timer(f"sess:{session_id}")
+                await self._cancel_in_use_to_idle_timer(service_id)
+                await self._cancel_excess_idle_timer(service_id)
+                try:
+                    await h.delete()
+                except (ApiException, config.ConfigException, OSError, RuntimeError) as e:
+                    logger.error(
+                        "清理失效 Pod 失败: service_id=%s pod_name=%s reason=%s err=%s",
+                        service_id,
+                        pod_name,
+                        reason,
+                        e,
+                        exc_info=True,
+                    )
+            finally:
+                self._deleting_services.discard(service_id)
 
-                            # 尝试清理 K8s 资源（幂等）
-                            try:
-                                await h.delete()
-                            except (ApiException, config.ConfigException, OSError, RuntimeError) as e:
-                                logger.error("清理失效 Pod 失败: service_id=%s err=%s", service_id, e, exc_info=True)
-
-        logger.info("Pod 监控：清理完成，已移除 %s 个失效 Pod", len(failed_pods))
+        if handlers_to_delete:
+            logger.warning("Pod 监控：清理完成，已移除 %s 个失效 Pod", len(handlers_to_delete))
