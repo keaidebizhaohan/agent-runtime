@@ -1375,6 +1375,25 @@ class ServiceManager(IServiceManager):
                             pod_names.add(h.pod_info.pod_name)
         return pod_names
 
+    def _remove_service_from_core_pools(self, service_id: str) -> tuple[bool, bool]:
+        """从 in_use / idle 两个核心服务池移除指定 service_id。
+
+        调用方应持有 self._lock，避免和路由、扩缩容同时移动同一个实例。
+        返回值分别表示是否从 in_use、idle 中移除过记录。
+        """
+        removed_from_in_use = False
+        removed_from_idle = False
+
+        for template_pool in self._in_use.values():
+            if template_pool.pop(service_id, None) is not None:
+                removed_from_in_use = True
+
+        for template_pool in self._idle.values():
+            if template_pool.pop(service_id, None) is not None:
+                removed_from_idle = True
+
+        return removed_from_in_use, removed_from_idle
+
     async def _cleanup_dead_pods(self, dead_pods: Dict[str, str]) -> None:
         """按 Pod 名称清理服务池、session 路由和 handler 状态。"""
         if not dead_pods:
@@ -1406,11 +1425,23 @@ class ServiceManager(IServiceManager):
                             reason,
                         )
 
-                        template_pool.pop(service_id, None)
+                        removed_from_in_use, removed_from_idle = self._remove_service_from_core_pools(service_id)
+                        logger.info(
+                            "已从服务池移除失效 Service: service_id=%s in_use=%s idle=%s",
+                            service_id,
+                            removed_from_in_use,
+                            removed_from_idle,
+                        )
                         self._to_idle_timer_armed.discard(service_id)
                         self._excess_idle_timer_armed.discard(service_id)
 
                         router_session_ids = await self._service_router.delete_service_sessions(service_id)
+                        if router_session_ids:
+                            logger.info(
+                                "已清理失效 Service 的 session 亲和映射: service_id=%s sessions=%s",
+                                service_id,
+                                router_session_ids,
+                            )
                         session_ids = sorted(set(h.open_session_ids()) | set(router_session_ids))
                         for session_id in session_ids:
                             self._pending_expired_sessions.pop(session_id, None)
