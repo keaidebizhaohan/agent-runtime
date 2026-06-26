@@ -31,7 +31,7 @@ class TestSQLiteHandler(unittest.IsolatedAsyncioTestCase):
                 ColumnDefinition("value", "string", length=255, nullable=True),
             ],
             indexes=[
-                IndexDefinition(["name"], unique=True),
+                IndexDefinition(["name"], unique=False),
             ],
         )
 
