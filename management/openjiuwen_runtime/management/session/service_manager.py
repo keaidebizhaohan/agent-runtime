@@ -571,6 +571,8 @@ class ServiceManager(IServiceManager):
         await self._timer.cancel_timer(f"sess:{session_id}")
         self._pending_expired_sessions.pop(session_id, None)
         h: Optional[IServiceHandler] = None
+        # 预留失败但已被 _pick_or_create 放入 _in_use 池的实例: 锁外推动其走 in_use→idle 回收, 避免孤儿泄漏
+        failed_to_reserve: Optional[IServiceHandler] = None
         try:
             # 在锁内完成亲和查找 / 新实例 / 新 session 的服务额度预留与路由绑定
             async with self._lock:
@@ -589,6 +591,10 @@ class ServiceManager(IServiceManager):
                                 sreq.session_concurrency,
                                 h.available_concurrency,
                             )
+                            # 记录失败的实例, 锁外推动其走 idle 回收流程; 仅置空 h 会导致
+                            # _pick_or_create 刚放入 _in_use 的实例成为孤儿 (无 session/inflight
+                            # 永不触发 _on_in_use_may_move_to_idle_pool 钩子), Pod 永久驻留
+                            failed_to_reserve = h
                             h = None
                         else:
                             await self._service_router.set_session_service(
@@ -605,6 +611,21 @@ class ServiceManager(IServiceManager):
                 # 2. 取消 excess_idle 回收计时（如果实例之前在 idle 且可能被回收）
                 await self._cancel_in_use_to_idle_timer(h.id)
                 await self._cancel_excess_idle_timer(h.id)
+
+            # 预留失败的实例 (含 _pick_or_create 新 deploy 的): 推动走 in_use→idle 回收
+            # service_ttl 到期后转入 idle, 若 idle>min_idle 则被 excess_idle 回收删 Pod;
+            # 若 idle<=min_idle 则作为热备保留, 可被后续 need 较小的请求复用
+            #
+            # 安全性说明:
+            # 1. _pick_or_create 分支2(in_use/idle 查找)已用 available>=need 过滤, 返回的实例
+            #    try_reserve_session_quota 必成功; 唯一预留失败的是分支3(新 deploy), 是全新的
+            #    无 session/inflight。故 failed_to_reserve 通常无其他占用。
+            # 2. 即使存在竞态(锁外调用前其他请求在此实例预留成功), _arm_in_use_to_idle_pool
+            #    内部有 `inflight>0 or active_session_count>0 则 return` 的保护, 不会错误 arm。
+            # 3. 若因有占用而跳过 arm, 该实例由其他请求的 _on_in_use_may_move_to_idle_pool
+            #    钩子(inflight 归零时)推动, 不会成为孤儿。
+            if failed_to_reserve is not None:
+                await self._arm_in_use_to_idle_pool(failed_to_reserve.id)
 
             if h is None:
                 await self._fail(w, 100001, session_id=session_id)
@@ -1111,11 +1132,29 @@ class ServiceManager(IServiceManager):
             logger.error(
                 "业务失败: code=%s session_id=%s %s", em.code, session_id, em.message
             )
+        # 错误响应必须符合上游 wire_codec.parse_agent_server_wire_chunk 的 legacy chunk shape
+        # (request_id + channel_id + is_complete + payload, 且无 ok), 否则上游抛
+        # ValueError: unrecognized wire shape, 导致前端收不到错误信息。
+        # request_id 是 WSS 多路复用硬条件, 缺失会被 dispatch_inbound_chunk 丢弃。
+        # channel_id 不在 IRequest 契约内, 兼容两种实现: 顶层属性 或 wire_dict 字段。
+        sreq = w.session_request
+        rid = sreq.request_id or ""
+        raw_msg = sreq.raw_msg
+        channel_id = getattr(raw_msg, "channel_id", None)
+        if channel_id is None:
+            wire_dict = getattr(raw_msg, "wire_dict", None)
+            if isinstance(wire_dict, dict):
+                channel_id = wire_dict.get("channel_id")
+        channel_id = str(channel_id) if channel_id is not None else ""
         await w.response_queue.put(
             {
-                "error_code": em.code,
-                "message": em.message,
-                "completed": True,
+                "request_id": rid,
+                "channel_id": channel_id,
+                "is_complete": True,
+                "payload": {
+                    "error_code": em.code,
+                    "message": em.message,
+                },
             }
         )
         if w.cancel and not w.cancel.done():
