@@ -1109,6 +1109,24 @@ class ServiceManager(IServiceManager):
 
         # 使用查询到的模板配置进行部署（如果存在）
         deploy_template = template_config if template_config else sreq.service_template
+
+        # 预检拦截: 单 session 声明的并发 need 若已超过单实例总并发上限, 即使新 deploy
+        # 一个 Pod 也无法满足 try_reserve_session_quota (available=total<need), 必然预留失败。
+        # 此时直接拒绝, 避免无效扩容 (Pod 创建后即成孤儿, 触发问题1的泄漏路径)。
+        # service_concurrency 直接取自 deploy_template (模板配置或 sreq.service_template),
+        # 缺失时回退到 Manager 全局 self._service_concurrency。
+        sc_raw = deploy_template.get("service_concurrency") if deploy_template else None
+        service_concurrency_for_tpl = (
+            int(sc_raw) if sc_raw is not None else self._service_concurrency
+        )
+        if need > service_concurrency_for_tpl:
+            logger.warning(
+                "预检拦截(会话并发超过单实例总并发): session_id=%s template_id=%s "
+                "session_concurrency=%s service_concurrency=%s, 拒绝扩容",
+                session_id, target_template_id, need, service_concurrency_for_tpl,
+            )
+            return None
+
         h2 = await self._new_deployed(deploy_template)
         if h2 is None:
             return None
