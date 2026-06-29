@@ -30,6 +30,9 @@ from a2a.server.agent_execution import AgentExecutor, RequestContext
 from a2a.server.context import ServerCallContext
 from a2a.server.events import EventQueue
 from a2a.types.a2a_pb2 import (
+    AgentCapabilities,
+    AgentCard,
+    AgentInterface,
     CancelTaskRequest,
     GetTaskRequest,
     Message,
@@ -49,6 +52,7 @@ from a2a.types.a2a_pb2 import (
     TASK_STATE_INPUT_REQUIRED,
     TASK_STATE_WORKING,
 )
+from a2a.utils.constants import PROTOCOL_VERSION_1_0, TransportProtocol
 from a2a.utils.errors import TaskNotFoundError, UnsupportedOperationError
 from google.protobuf.json_format import MessageToDict, ParseDict
 from google.protobuf.struct_pb2 import Struct, Value
@@ -357,15 +361,38 @@ class Executor(AgentExecutor):
         """是否具备派发能力：注入了单 client（兜底）或有 client_factory（按 url 构造）。"""
         return self._sub_agent_client is not None or self._client_factory is not None
 
+    @staticmethod
+    def _build_sub_agent_card(url: str) -> AgentCard:
+        """用主侧已知可达地址 url（yaml 配置的 spec.url）自建子 Agent 最小 Card。
+
+        不信任子 Agent Card 自报的 netloc——容器内
+        ``host:8090`` 会让 RPC 回环到主侧自身（见部署排障）。改为以 yaml 配置的
+        可达地址为权威 RPC 目标，对齐 VA client（``_build_va_card`` + ``create``）。
+
+        子 Agent A2A RPC 端点挂在 ``/a2a/``，补尾斜杠避免 ``POST /a2a`` 触发 307。
+        """
+        rpc_url = url.rstrip("/") + "/"
+        card = AgentCard(name="SubDPA", description="子 Agent A2A 端点", version="1.0.0")
+        card.supported_interfaces.append(
+            AgentInterface(
+                protocol_binding=TransportProtocol.JSONRPC,
+                url=rpc_url,
+                protocol_version=PROTOCOL_VERSION_1_0,
+            )
+        )
+        card.capabilities.CopyFrom(AgentCapabilities(streaming=True))
+        return card
+
     async def _get_sub_agent_client(self, url: str) -> Optional[Client]:
         """解析某 url 对应的子 Agent A2A client。
 
         - 注入了 ``sub_agent_client``（单测/单部署兜底）→ 直接复用，忽略 url 差异；
-        - 否则用 ``client_factory`` 按 url 懒 ``create_from_url`` 并缓存（每 url 一个）；
+        - 否则用 ``client_factory`` 按 yaml 配置的 url 自建 Card 后 ``create`` 并缓存（每 url 一个）；
         - url 为空或无 factory → 返回 None（由调用方将该实体降级 failed）。
 
-        ``create_from_url`` 可能抛（子 Agent 不可达 / 卡片拉取失败）；不在此吞掉，
-        由 ``_run_sub_agent`` 的 try/except 捕获 → 仅该实体 failed，不连坐其他。
+        直接用 yaml 中的 url 作为 RPC 目标，不再 ``create_from_url`` 拉卡片
+        （子 Agent Card 自报容器内地址会导致 RPC 回环到主侧）。建连/发送失败由
+        ``_run_sub_agent`` 的 try/except 捕获 → 仅该实体 failed，不连坐其他。
         """
         if self._sub_agent_client is not None:
             return self._sub_agent_client
@@ -373,9 +400,10 @@ class Executor(AgentExecutor):
             return None
         client = self._sub_agent_clients.get(url)
         if client is None:
-            client = await self._client_factory.create_from_url(url)
+            card = self._build_sub_agent_card(url)
+            client = self._client_factory.create(card)
             self._sub_agent_clients[url] = client
-            logger.info(f"[Executor] sub_agent client 懒构造并缓存：url={url}")
+            logger.info(f"[Executor] sub_agent client 构造并缓存（RPC 直连 yaml 地址）：url={url}")
         return client
 
     async def cancel_task(self, conv_id: str) -> None:
@@ -1224,7 +1252,7 @@ class Executor(AgentExecutor):
                 "trace_id": session_ctx.get("trace_id", ""),  # 链路可观测性
                 "agent_id": getattr(get_settings(), "dpa_agent_id", "") or "",  # 子 Agent 自身 ID
                 "params": session_ctx.get("params", {}),   # 继承父请求 URL query（如 type/workspace_id），供子 Agent 工作流调用 VA 时透传
-                "body": {},     # 子 Agent 自行构造 VA 请求体，初始为空
+                "body": session_ctx.get("body", {}),   # 继承父请求体：子 Agent 调 VA 时仅覆盖 query/intent，其余业务字段沿用父请求
             },
             ex=_TTL,
         )
@@ -1362,7 +1390,9 @@ class Executor(AgentExecutor):
     ) -> SubAgentResult:
         """驱动单个子 Agent：node_start → 盖章/透传 report → node_end，并捕获 child_task_id。"""
         conv_id = turn_ctx.conv_id
-        sub_conv_id = f"{conv_id}:sub:{spec.entity_id}"
+        # 分隔符用 '-' 而非 ':'：子 Agent 会把该 conv_id 透传给 VA 作 conversationId，
+        # 工作流平台校验 conversationId 必须匹配 ^[a-zA-Z0-9_-]+$（冒号会被拒，返回 500）。
+        sub_conv_id = f"{conv_id}-sub-{spec.entity_id}"
         await self._emit_sub_task(
             turn_ctx, child_path, "agent",
             {"event": "node_start", "entity_name": spec.entity_name},
@@ -1518,6 +1548,7 @@ class Executor(AgentExecutor):
             "headers": parent_cached.get("headers", {}),   # VA 鉴权 token
             "params": parent_cached.get("params", {}),      # 前端 URL query（如 type/workspace_id）继承给子 Agent 的 VA 调用
             "trace_id": parent_cached.get("trace_id", ""),  # 链路追踪
+            "body": parent_cached.get("body", {}),          # 下传父请求体：子 Agent 仅覆盖 query/intent，其余业务字段继承（工作流 code 组件依赖）
             "sub_task_path": list(child_path),              # 下传绝对路径：子节点继续盖章 / 深度门控
         }
         request = self._build_sub_agent_message(spec.query, sub_conv_id, session_context)
