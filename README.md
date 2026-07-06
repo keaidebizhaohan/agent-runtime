@@ -69,10 +69,10 @@ agent-runtime/
 
 ## 环境要求
 
-* python>=3.11.4
-* uv>=0.25.x
-* git（用于拉取代码）
-* bash（Linux/macOS 系统）或 PowerShell（Windows 系统）
+- python>=3.11.4
+- uv>=0.25.x
+- git（用于拉取代码）
+- bash（Linux/macOS 系统）或 PowerShell（Windows 系统）
 
 ## 快速开始
 
@@ -92,9 +92,15 @@ cp .env.example .env
 
 然后按需修改 `server/.env`，重点包括：
 
-- `DB_TYPE`：支持 `sqlite` / `mysql`
+- `RUNTIME_DB_TYPE`：支持 `sqlite` / `mysql` / `gaussdb` / `opengauss`
 - `IP`：Runtime 服务地址
 - `LOWCODE_IMAGE`：低码 Agent 相关镜像配置
+
+说明：
+
+- 默认安装仅包含 `sqlite` / `mysql` 所需依赖。
+- 当 `RUNTIME_DB_TYPE=gaussdb` 或 `RUNTIME_DB_TYPE=opengauss` 时，需要额外安装 `async-gaussdb`。
+- 使用仓库自带启动脚本时，脚本会根据 `server/.env` 中的 `RUNTIME_DB_TYPE` 自动安装 `foundation[gaussdb]` 可选依赖；手工安装时可执行 `uv pip install -e "./foundation[gaussdb]"`。
 
 完整配置项说明请参考 `docs/zh/2. 配置说明.md`。
 
@@ -144,7 +150,7 @@ Windows（PowerShell）:
 当前支持的关键配置能力：
 
 - 运行端口与服务地址配置
-- 数据库类型配置（SQLite / MySQL）
+- 数据库类型配置（SQLite / MySQL / GaussDB / openGauss）
 - 部署模式选择（进程；容器与 K8s 持续完善）
 - 租户上下文透传与隔离策略
 
@@ -163,4 +169,3 @@ Windows（PowerShell）:
 - 完善 Docker / Kubernetes 部署能力
 - 补齐 CLI 接入能力
 - 补齐 WebUI 接入能力
-

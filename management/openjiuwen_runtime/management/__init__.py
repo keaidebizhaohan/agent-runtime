@@ -11,6 +11,7 @@ from .manager import DeploymentManager
 from .models.deployment_params import (
     DeployAgentParams,
     DeployPluginParams,
+    DeployImageParams,
     ListDeploymentsParams,
 )
 from .models.enums import DeployMode, DeploymentType, DeploymentStatus
@@ -48,6 +49,7 @@ __all__ = [
     # Deployment params
     "DeployAgentParams",
     "DeployPluginParams",
+    "DeployImageParams",
     "ListDeploymentsParams",
     # Enums
     "DeploymentType",

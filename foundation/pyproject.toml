@@ -14,17 +14,25 @@ dependencies = [
     # config
     "pyyaml>=6.0",
     # db
-    "sqlalchemy==2.0.41",
+    "sqlalchemy>=2.0.41",
     "greenlet>=3.0.0",
     "pymysql==1.1.1",
     "cryptography>=42.0.0",
-    "pydantic==2.11.7",
-    "pydantic-settings==2.5.2",
+    "pydantic>=2.11.7",
+    "pydantic-settings>=2.5.2",
     "aiomysql==0.2.0",
-    "aiosqlite==0.21.0",
+    "aiosqlite>=0.21.0",
     "redis==7.1.0",
     # lint
     "ruff==0.9.10",
+]
+
+[project.optional-dependencies]
+gaussdb = [
+    "async-gaussdb>=0.30.4",
+]
+amqp = [
+    "aio-pika>=9.4",
 ]
 
 [tool.uv]
@@ -46,6 +54,9 @@ url = "https://mirrors.aliyun.com/pypi/simple/"
 where = ["."]
 exclude = ["*.egg-info", "tests"]
 include = ["openjiuwen_runtime*"]
+
+[tool.setuptools.package-data]
+"openjiuwen_runtime.foundation" = ["config/logging.yaml"]
 	 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

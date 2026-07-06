@@ -40,13 +40,19 @@ logger = get_logger(__name__)
 _allocated_ports: set[int] = set()
 
 # 初始化数据库组件
-logger.info(f"Using database: {settings.DB_TYPE}")
-if settings.DB_TYPE == "sqlite":
+logger.info(f"Using database: {settings.RUNTIME_DB_TYPE}")
+if settings.RUNTIME_DB_TYPE == "sqlite":
     db_handler = SQLiteHandler("deployments.db")
-elif settings.DB_TYPE == "mysql":
+elif settings.RUNTIME_DB_TYPE == "mysql":
     db_handler = MySQLHandler()
+elif settings.RUNTIME_DB_TYPE in {"gaussdb", "opengauss"}:
+    from openjiuwen_runtime.foundation.db.gaussdb_handler import GaussDBHandler
+
+    db_handler = GaussDBHandler()
 else:
-    raise ValueError(f"Unsupported DB_TYPE: {settings.DB_TYPE}. Use 'sqlite' or 'mysql'.")
+    raise ValueError(
+        f"Unsupported RUNTIME_DB_TYPE: {settings.RUNTIME_DB_TYPE}. Use 'sqlite', 'mysql', 'gaussdb', or 'opengauss'."
+    )
 
 manager = DeploymentManager(db_handler)
 
@@ -82,14 +88,14 @@ async def health():
 
 
 def prepare_subprocess_deployment(
-    mode: str,
+    deploy_type: str,
     port: int | None
 ) -> tuple[int, Path]:
     """
     预处理 subprocess 部署：分配端口、检查端口、获取 WHL 包路径
     返回：(最终使用的端口, whl文件路径)
     """
-    if mode != "subprocess":
+    if deploy_type != "subprocess":
         return 0, Path("")
 
     # 端口分配与验证
@@ -105,7 +111,11 @@ def prepare_subprocess_deployment(
         )
     logger.info(f"Port: {port}")
 
-    # 获取 WHL 包路径
+    # PyPI仓库安装模式
+    if settings.MODE == "product":
+        return port, Path("")
+
+    # 开发模式，本地源码部署: 获取 WHL 包路径
     logger.info(f"dist_path: {settings.dist_path}")
     whl_path = settings.dist_path / "lowcode_agent_runner-0.1.0-py3-none-any.whl"
     if not whl_path.exists():
@@ -227,9 +237,12 @@ async def deploy_agent(
 
     except Exception as e:
         logger.exception("Agent deployment failed")
+        detail = str(e)
+        if not detail.startswith("Deployment failed"):
+            detail = f"Deployment failed: {detail}"
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Deployment failed: {str(e)}",
+            detail=detail,
         ) from e
 
 

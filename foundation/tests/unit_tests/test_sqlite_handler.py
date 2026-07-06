@@ -31,7 +31,7 @@ class TestSQLiteHandler(unittest.IsolatedAsyncioTestCase):
                 ColumnDefinition("value", "string", length=255, nullable=True),
             ],
             indexes=[
-                IndexDefinition(["name"], unique=True),
+                IndexDefinition(["name"], unique=False),
             ],
         )
 
@@ -120,3 +120,84 @@ class TestSQLiteHandler(unittest.IsolatedAsyncioTestCase):
 
         records_offset = await self.handler.list_records("test_table", limit=2, offset=1)
         self.assertEqual(len(records_offset), 2)
+
+    async def test_list_records_order_by_string_asc(self):
+        """测试列表查询 - order_by 字符串升序"""
+        await self.handler.init_table(self.test_table_def)
+
+        await self.handler.create("test_table", {"name": "banana", "value": "b"})
+        await self.handler.create("test_table", {"name": "apple", "value": "a"})
+        await self.handler.create("test_table", {"name": "cherry", "value": "c"})
+
+        records = await self.handler.list_records("test_table", order_by="name")
+        self.assertEqual(len(records), 3)
+        self.assertEqual(records[0].name, "apple")
+        self.assertEqual(records[1].name, "banana")
+        self.assertEqual(records[2].name, "cherry")
+
+    async def test_list_records_order_by_string_desc(self):
+        """测试列表查询 - order_by 字符串降序"""
+        await self.handler.init_table(self.test_table_def)
+
+        await self.handler.create("test_table", {"name": "banana", "value": "b"})
+        await self.handler.create("test_table", {"name": "apple", "value": "a"})
+        await self.handler.create("test_table", {"name": "cherry", "value": "c"})
+
+        records = await self.handler.list_records("test_table", order_by="name DESC")
+        self.assertEqual(len(records), 3)
+        self.assertEqual(records[0].name, "cherry")
+        self.assertEqual(records[1].name, "banana")
+        self.assertEqual(records[2].name, "apple")
+
+    async def test_list_records_order_by_string_prefix(self):
+        """测试列表查询 - order_by 字符串前缀负号降序"""
+        await self.handler.init_table(self.test_table_def)
+
+        await self.handler.create("test_table", {"name": "banana", "value": "b"})
+        await self.handler.create("test_table", {"name": "apple", "value": "a"})
+        await self.handler.create("test_table", {"name": "cherry", "value": "c"})
+
+        records = await self.handler.list_records("test_table", order_by="-name")
+        self.assertEqual(len(records), 3)
+        self.assertEqual(records[0].name, "cherry")
+        self.assertEqual(records[1].name, "banana")
+        self.assertEqual(records[2].name, "apple")
+
+    async def test_list_records_order_by_list(self):
+        """测试列表查询 - order_by 多字段排序"""
+        await self.handler.init_table(self.test_table_def)
+
+        await self.handler.create("test_table", {"name": "apple", "value": "z"})
+        await self.handler.create("test_table", {"name": "banana", "value": "a"})
+        await self.handler.create("test_table", {"name": "apple", "value": "a"})
+
+        records = await self.handler.list_records(
+            "test_table",
+            order_by=[("name", False), ("value", True)]
+        )
+        self.assertEqual(len(records), 3)
+        self.assertEqual(records[0].name, "apple")
+        self.assertEqual(records[0].value, "z")  # value 降序，z > a
+        self.assertEqual(records[1].name, "apple")
+        self.assertEqual(records[1].value, "a")   # value 次之
+        self.assertEqual(records[2].name, "banana")
+
+    async def test_list_records_with_filters_and_order_by(self):
+        """测试列表查询 - 带过滤器和排序"""
+        await self.handler.init_table(self.test_table_def)
+
+        await self.handler.create("test_table", {"name": "alpha", "value": "10"})
+        await self.handler.create("test_table", {"name": "beta", "value": "20"})
+        await self.handler.create("test_table", {"name": "gamma", "value": "30"})
+        await self.handler.create("test_table", {"name": "delta", "value": "40"})
+        await self.handler.create("test_table", {"name": "epsilon", "value": "50"})
+
+        records = await self.handler.list_records(
+            "test_table",
+            order_by="-value",
+            limit=3
+        )
+        self.assertEqual(len(records), 3)
+        self.assertEqual(records[0].value, "50")
+        self.assertEqual(records[1].value, "40")
+        self.assertEqual(records[2].value, "30")

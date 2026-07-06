@@ -3,6 +3,7 @@
 
 """Server Configuration"""
 import os
+import json
 from typing import Optional, Literal
 from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -16,24 +17,22 @@ class Settings(BaseSettings):
     # --------------------------
     # 【基础配置】
     # --------------------------
-    DB_TYPE: Literal["mysql", "sqlite"] = Field(default="sqlite", env="DB_TYPE")
-
+    RUNTIME_DB_TYPE: Literal["mysql", "sqlite", "gaussdb", "opengauss"] = Field(default="sqlite", env="RUNTIME_DB_TYPE")
 
     # --------------------------
-    # 【MySQL 配置】（静态可选，DB_TYPE=mysql 时必选）
+    # 【MySQL RUNTIME_DB_TYPE=mysql 时必选）
     # --------------------------
-    DB_HOST: Optional[str] = Field(default=None, env="DB_HOST")
-    DB_PORT: Optional[int] = Field(default=None, env="DB_PORT")
-    DB_USER: Optional[str] = Field(default=None, env="DB_USER")
-    DB_PASSWORD: Optional[str] = Field(default=None, env="DB_PASSWORD")
-    DB_NAME: Optional[str] = Field(default=None, env="DB_NAME")
+    RUNTIME_DB_HOST: Optional[str] = Field(default=None, env="RUNTIME_DB_HOST")
+    RUNTIME_DB_PORT: Optional[int] = Field(default=None, env="RUNTIME_DB_PORT")
+    RUNTIME_DB_USER: Optional[str] = Field(default=None, env="RUNTIME_DB_USER")
+    RUNTIME_DB_PASSWORD: Optional[str] = Field(default=None, env="RUNTIME_DB_PASSWORD")
+    RUNTIME_DB_NAME: Optional[str] = Field(default=None, env="RUNTIME_DB_NAME")
 
     # --------------------------
     # 【服务配置】
     # --------------------------
-    # ✅【必选配置】
-    IP: str = Field(env="IP")
-    LOWCODE_IMAGE: str = Field(env="LOWCODE_IMAGE")
+    IP: Optional[str] = Field(default=None, env="IP")
+    LOWCODE_IMAGE: Optional[str] = Field(default=None, env="LOWCODE_IMAGE")
 
     # 可选配置
     DEPLOY_DIR: str = Field(default="/tmp/deploys", env="DEPLOY_DIR")
@@ -42,6 +41,9 @@ class Settings(BaseSettings):
     PORT: int = Field(default=8186, env="PORT")
     UV_EXTRA_ARGS: str = Field(default="", env="UV_EXTRA_ARGS")
     DEPLOY_TYPE: Literal["subprocess", "docker", "k8s"] = Field(default="subprocess", env="DEPLOY_TYPE")
+    MODE: Literal["dev", "product"] = Field(default="product", env="MODE")
+    KUBECONFIG: str = Field(default="", env="KUBECONFIG")
+    K8S_DEFAULT_CONFIG_PATH: str = Field(default="", env="K8S_DEFAULT_CONFIG_PATH")
 
     # ========================
     # 内置 对象
@@ -49,26 +51,56 @@ class Settings(BaseSettings):
     deploy_path: Path | None = None
     dist_path: Path | None = None
 
+    def _server_env_file_present(self) -> bool:
+        env_file = self.model_config.get("env_file")
+        return bool(env_file and Path(env_file).exists())
+
     # ========================
     # MySQL 动态必选校验
     # ========================
     @model_validator(mode="after")
     def check_mysql_required(self) -> "Settings":
-        if self.DB_TYPE == "mysql":
+        if not self._server_env_file_present():
+            return self
+        if self.RUNTIME_DB_TYPE in {"mysql", "gaussdb", "opengauss"}:
             missing = []
-            if not self.DB_HOST:
-                missing.append("DB_HOST")
-            if not self.DB_PORT:
-                missing.append("DB_PORT")
-            if not self.DB_USER:
-                missing.append("DB_USER")
-            if not self.DB_PASSWORD:
-                missing.append("DB_PASSWORD")
-            if not self.DB_NAME:
-                missing.append("DB_NAME")
+            if not self.RUNTIME_DB_HOST:
+                missing.append("RUNTIME_DB_HOST")
+            if not self.RUNTIME_DB_PORT:
+                missing.append("RUNTIME_DB_PORT")
+            if not self.RUNTIME_DB_USER:
+                missing.append("RUNTIME_DB_USER")
+            if not self.RUNTIME_DB_PASSWORD:
+                missing.append("RUNTIME_DB_PASSWORD")
+            if not self.RUNTIME_DB_NAME:
+                missing.append("RUNTIME_DB_NAME")
 
             if missing:
-                raise ValueError(f"When DB_TYPE=mysql, the following fields are required: {', '.join(missing)}")
+                msg = (
+                    "When RUNTIME_DB_TYPE is mysql/gaussdb/opengauss, "
+                    "the following fields are required: "
+                    f"{', '.join(missing)}"
+                )
+                raise ValueError(msg)
+        return self
+
+    @model_validator(mode="after")
+    def check_runtime_required(self) -> "Settings":
+        if not self._server_env_file_present():
+            return self
+        missing = []
+        if not self.IP:
+            missing.append("IP")
+
+        if self.DEPLOY_TYPE in {"docker", "k8s"} and not self.LOWCODE_IMAGE:
+            missing.append("LOWCODE_IMAGE")
+
+        if missing:
+            deploy_type = self.DEPLOY_TYPE
+            raise ValueError(
+                f"Missing required runtime settings for DEPLOY_TYPE={deploy_type}: {', '.join(missing)}"
+            )
+
         return self
 
     # ========================
@@ -107,12 +139,28 @@ class Settings(BaseSettings):
 
         return self
 
+    def get_k8s_defaults(self) -> dict:
+        """读取 K8s 默认配置 JSON 文件，返回参数字典。"""
+        if not self.K8S_DEFAULT_CONFIG_PATH:
+            return {}
+        config_path = Path(self.K8S_DEFAULT_CONFIG_PATH)
+        if not config_path.is_absolute():
+            config_path = PROJECT_ROOT / config_path
+        if not config_path.exists():
+            return {}
+        try:
+            defaults = json.loads(config_path.read_text(encoding="utf-8"))
+            return defaults
+        except (json.JSONDecodeError, TypeError) as e:
+            return {}
+
 
     # 自动从 .env 读取
     model_config = SettingsConfigDict(
         env_file=os.path.join(PROJECT_ROOT, "server/.env"),
         env_file_encoding="utf-8",
-        case_sensitive=True
+        case_sensitive=True,
+        extra="ignore"
     )
 
 # 初始化配置

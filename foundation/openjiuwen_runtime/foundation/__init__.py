@@ -18,6 +18,7 @@ from .docker_utils import (
     remove_docker_image,
     generate_dockerfile,
 )
+from .messaging import AmqpTopicJsonPublisher, consume_topic_json_forever
 
 __all__ = [
     "package_python_to_whl",
@@ -33,4 +34,6 @@ __all__ = [
     "tag_docker_image",
     "remove_docker_image",
     "generate_dockerfile",
+    "AmqpTopicJsonPublisher",
+    "consume_topic_json_forever",
 ]
