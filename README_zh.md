@@ -169,3 +169,5 @@ Windows（PowerShell）:
 - 完善 Docker / Kubernetes 部署能力
 - 补齐 CLI 接入能力
 - 补齐 WebUI 接入能力
+
+本产品仅作为流程编排工具，不包含 AI 模型能力；用户在连接 AI 模型用于特定业务场景时，需自行承担欧盟 AI 法案等相关合规义务。
