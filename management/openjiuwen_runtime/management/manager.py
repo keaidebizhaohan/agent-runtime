@@ -389,11 +389,17 @@ class DeploymentManager:
         deployment_id: str,
         timeout_seconds: int = 600,
         interval_seconds: float = 20.0,
+        require_http_health: bool = True,
     ) -> None:
         """
         等待部署就绪：
         1) 状态为 running
-        2) 若存在 URL，则 /health 探活成功
+        2) 非 K8s 部署若存在 URL，则 /health 探活成功
+
+        K8s 部署器在返回前已经通过 Kubernetes API 等待 Deployment
+        的 ready_replicas 和 available_replicas 达标，无需再从控制面访问
+        Service URL。本地 Docker Desktop 中该 URL 通常还未做 port-forward，
+        二次探活会导致部署接口无谓等待至超时。
         """
         deadline = asyncio.get_running_loop().time() + timeout_seconds
         last_status = None
@@ -405,7 +411,7 @@ class DeploymentManager:
 
             last_status = deployment.deployment_status.value
             if deployment.deployment_status == DeploymentStatus.RUNNING:
-                if deployment.url:
+                if deployment.url and require_http_health:
                     if await self._check_health_endpoint(deployment.url):
                         return
                 else:
@@ -460,7 +466,10 @@ class DeploymentManager:
             if not deploy_result.success:
                 raise RuntimeError(deploy_result.message or f"Deployment {deployment_id} failed")
 
-            await self._wait_until_deployment_ready(deployment_id)
+            await self._wait_until_deployment_ready(
+                deployment_id,
+                require_http_health=params.mode != DeployMode.K8S,
+            )
             logger.info(
                 "Deployment completed: deployment_id=%s, name=%s",
                 deployment_id,
