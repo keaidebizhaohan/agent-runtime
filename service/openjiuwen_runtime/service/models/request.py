@@ -9,6 +9,21 @@ from typing import List, Dict, Any, Optional
 from pydantic import BaseModel, Field
 
 
+DEFAULT_USER_ID = "anonymous"
+DEFAULT_SPACE_ID = "default"
+
+
+def build_session_id(
+    conversation_id: str,
+    user_id: Optional[str] = None,
+    space_id: Optional[str] = None,
+) -> str:
+    """生成运行时会话隔离键，避免不同空间或用户的同名会话冲突。"""
+    normalized_space_id = (space_id or "").strip() or DEFAULT_SPACE_ID
+    normalized_user_id = (user_id or "").strip() or DEFAULT_USER_ID
+    return f"{normalized_space_id}:{normalized_user_id}:{conversation_id}"
+
+
 class QueryRequest(BaseModel):
     """
     Agent 查询请求模型
@@ -30,17 +45,26 @@ class QueryRequest(BaseModel):
         description="用于会话跟踪的对话 ID"
     )
     user_id: str = Field(
-        default="anonymous",
+        default=DEFAULT_USER_ID,
         description="用户 ID"
     )
     space_id: str = Field(
-        default="default",
+        default=DEFAULT_SPACE_ID,
         description="工作空间 ID"
     )
     stream: bool = Field(
         default=True,
         description="是否使用流式输出"
     )
+
+    @property
+    def session_id(self) -> str:
+        """内部会话键；对外仍保留客户端传入的 conversation_id。"""
+        return build_session_id(
+            conversation_id=self.conversation_id,
+            user_id=self.user_id,
+            space_id=self.space_id,
+        )
 
 
 class ResetConversationRequest(BaseModel):
@@ -60,3 +84,16 @@ class ResetConversationRequest(BaseModel):
         default=None,
         description="用于授权的用户 ID"
     )
+    space_id: Optional[str] = Field(
+        default=None,
+        description="工作空间 ID"
+    )
+
+    @property
+    def session_id(self) -> str:
+        """使用与查询请求相同的会话隔离键。"""
+        return build_session_id(
+            conversation_id=self.conversation_id,
+            user_id=self.user_id,
+            space_id=self.space_id,
+        )

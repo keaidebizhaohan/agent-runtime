@@ -284,7 +284,7 @@ class AgentApp(BaseApp):
             """
             # 调用 Agent 的会话清理方法
             if self.agent and hasattr(self.agent, 'clear_session'):
-                await self.agent.clear_session(request.conversation_id)
+                await self.agent.clear_session(request.session_id)
 
             return {"status": "ok", "message": f"Conversation {request.conversation_id} reset"}
 

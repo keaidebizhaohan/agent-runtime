@@ -537,6 +537,7 @@ async def agent_detail() -> dict:
 async def query(msgs, request, cancel_event=None) -> AsyncIterator[Tuple[dict, bool]]:
     """处理查询请求"""
     conversation_id = request.conversation_id
+    session_id = request.session_id
     # 每个请求入口都做一次收敛，防止运行期动态注入阻塞日志 handler
     if _ALLOWED_LOG_HANDLER_IDS:
         for logger_name in _STRICT_LOGGER_HANDLER_NAMES:
@@ -582,7 +583,7 @@ async def query(msgs, request, cancel_event=None) -> AsyncIterator[Tuple[dict, b
             Runner.run_agent_streaming,
             agent=app.agent,
             inputs=inputs,
-            session=conversation_id,
+            session=session_id,
         )
 
         async with asyncio.timeout_at(deadline):
