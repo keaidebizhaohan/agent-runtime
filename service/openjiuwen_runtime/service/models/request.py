@@ -5,23 +5,32 @@
 openjiuwen-runtime-sdk 的请求和响应模型
 """
 
+import os
 from typing import List, Dict, Any, Optional
 from pydantic import BaseModel, Field
 
 
 DEFAULT_USER_ID = "anonymous"
 DEFAULT_SPACE_ID = "default"
+DEFAULT_AGENT_ID = "default-agent"
 
 
 def build_session_id(
     conversation_id: str,
     user_id: Optional[str] = None,
     space_id: Optional[str] = None,
+    agent_id: Optional[str] = None,
 ) -> str:
-    """生成运行时会话隔离键，避免不同空间或用户的同名会话冲突。"""
+    """生成 Agent、空间、用户三层隔离的运行时会话键。"""
+    normalized_agent_id = (
+        agent_id or os.getenv("DEPLOYMENT_ID") or ""
+    ).strip() or DEFAULT_AGENT_ID
     normalized_space_id = (space_id or "").strip() or DEFAULT_SPACE_ID
     normalized_user_id = (user_id or "").strip() or DEFAULT_USER_ID
-    return f"{normalized_space_id}:{normalized_user_id}:{conversation_id}"
+    return (
+        f"{normalized_agent_id}:{normalized_space_id}:"
+        f"{normalized_user_id}:{conversation_id}"
+    )
 
 
 class QueryRequest(BaseModel):

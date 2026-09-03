@@ -174,7 +174,13 @@ class DockerDeployer(Deployer[DockerParams]):
             # link-auth：透传控制面的链路握手鉴权开关给 AgentServer 容器（容器不继承宿主
             # 环境）；显式 env 优先，故用 setdefault。enforce 下若缺，pod 不签 ack 令牌、
             # Gateway 反向校验失败。
-            for _link_env in ("CLAW_LINK_AUTH_MODE", "CLAW_LINK_TOKEN_TTL"):
+            for _link_env in (
+                "CLAW_LINK_AUTH_MODE",
+                "CLAW_LINK_TOKEN_TTL",
+                "CHECKPOINTER_REDIS_URL",
+                "CHECKPOINTER_DEFAULT_TTL_MINUTES",
+                "CHECKPOINTER_REFRESH_TTL_ON_READ",
+            ):
                 _link_val = os.getenv(_link_env)
                 if _link_val:
                     env_vars.setdefault(_link_env, _link_val)

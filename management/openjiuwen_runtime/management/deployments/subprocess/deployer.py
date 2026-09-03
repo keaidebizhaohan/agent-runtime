@@ -186,6 +186,7 @@ class LocalSubprocessDeployer(Deployer[SubprocessParams]):
 
             env = os.environ.copy()
             env["VIRTUAL_ENV"] = str(venv_path)
+            env["DEPLOYMENT_ID"] = deployment_id
             # 通过环境变量传递 userdata，避免在 ps/任务管理器中泄露敏感信息
             if userdata:
                 env["RUNTIME_USERDATA"] = userdata

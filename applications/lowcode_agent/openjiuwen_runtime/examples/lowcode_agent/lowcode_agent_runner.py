@@ -113,6 +113,9 @@ from openjiuwen_runtime.examples.lowcode_agent.agui_converter import (
 from openjiuwen_runtime.examples.lowcode_agent.workflow_registration import (
     normalize_workflow_providers_for_agent,
 )
+from openjiuwen_runtime.examples.lowcode_agent.session_checkpointer import (
+    init_session_checkpointer,
+)
 from openjiuwen_runtime.service.app.agent_app import AgentApp
 
 if _runtime_db_type in {"gaussdb", "opengauss"}:
@@ -438,6 +441,10 @@ async def init():
 
     # 启动 Runner
     logger.info("启动 Runner...")
+
+    # Runner 启动前注册共享 Checkpointer，使多个 Pod 能按同一
+    # session_id 恢复和保存会话状态。未配置 Redis 时保留原内存模式。
+    await init_session_checkpointer()
 
     # 设置工作流超时时间（支持从环境变量获取，默认 5 分钟）
     workflow_timeout = os.environ.get("WORKFLOW_EXECUTE_TIMEOUT", "300")

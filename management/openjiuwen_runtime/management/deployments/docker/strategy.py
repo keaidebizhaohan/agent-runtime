@@ -69,7 +69,7 @@ class DockerStrategy(BaseDeploymentStrategy[DockerInfo]):
         record_data = data.get("data") or {}
         userdata = record_data.get("userdata") if isinstance(record_data, dict) else None
 
-        env_vars = {}
+        env_vars = {"DEPLOYMENT_ID": data.get("deployment_id")}
         if userdata:
             env_vars["RUNTIME_USERDATA"] = userdata
             logger.info("Using userdata: %s", mask_userdata(userdata))
