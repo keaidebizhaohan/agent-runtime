@@ -60,6 +60,7 @@ class K8sInfo(BaseModel):
     replicas: Optional[int] = None
     image: Optional[str] = None
     container_port: Optional[int] = None
+    service_port: Optional[int] = None
     node_port: Optional[int] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None

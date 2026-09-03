@@ -6,14 +6,19 @@
 FastAPI 服务器，提供 Agent 部署管理 REST API（支持租户隔离）
 """
 
+import asyncio
+import os
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, AsyncIterator
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, UploadFile, status
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
+from kubernetes_asyncio import client as async_k8s_client
+from kubernetes_asyncio import config as async_k8s_config
+from kubernetes_asyncio.config.config_exception import ConfigException as AsyncK8sConfigException
 
 from openjiuwen_runtime.foundation.log import get_logger
 from openjiuwen_runtime.foundation.config import settings
@@ -56,15 +61,64 @@ else:
 
 manager = DeploymentManager(db_handler)
 
+# Runtime Server 通过 Kubernetes API Server 代理访问 Agent Service，
+# 为集群外客户端提供统一入口，避免为每个 Agent 维护 port-forward。
+_k8s_proxy_api_client: async_k8s_client.ApiClient | None = None
+_k8s_proxy_client_lock = asyncio.Lock()
+
+
+async def _get_k8s_proxy_api_client() -> async_k8s_client.ApiClient:
+    """懒加载 K8s 客户端，同时支持集群内配置和本机 kubeconfig。"""
+    global _k8s_proxy_api_client
+    if _k8s_proxy_api_client is not None:
+        return _k8s_proxy_api_client
+
+    async with _k8s_proxy_client_lock:
+        if _k8s_proxy_api_client is not None:
+            return _k8s_proxy_api_client
+        try:
+            async_k8s_config.load_incluster_config()
+        except AsyncK8sConfigException:
+            await async_k8s_config.load_kube_config(
+                config_file=os.getenv("KUBECONFIG") or None,
+            )
+        _k8s_proxy_api_client = async_k8s_client.ApiClient()
+        return _k8s_proxy_api_client
+
+
+def _external_agent_service_url(request: Request, deployment_id: str) -> str:
+    """生成集群外客户端可访问的 Agent 网关地址。"""
+    return (
+        f"{str(request.base_url).rstrip('/')}"
+        f"/api/v1/agents/{deployment_id}/service"
+    )
+
+
+async def _k8s_service_details(deployment_id: str) -> tuple[str, str, int] | None:
+    """返回 namespace、service name 和 service port；非 K8s 部署返回 None。"""
+    info = await manager.get_k8s_info(deployment_id)
+    if info is None:
+        return None
+    namespace = info.namespace or "default"
+    service_name = info.deployment_name or f"agent-{deployment_id[:6]}"
+    service_port = info.service_port or info.container_port or 8090
+    return namespace, service_name, int(service_port)
+
 
 @asynccontextmanager
 async def lifespan(fastapi_app: FastAPI):
     """应用生命周期管理"""
     # 启动时初始化
     await manager.initialize()
-    yield
-    # 关闭时清理
-    await manager.shutdown()
+    try:
+        yield
+    finally:
+        # 关闭时清理
+        global _k8s_proxy_api_client
+        if _k8s_proxy_api_client is not None:
+            await _k8s_proxy_api_client.close()
+            _k8s_proxy_api_client = None
+        await manager.shutdown()
 
 
 # 创建 FastAPI 应用
@@ -229,6 +283,15 @@ async def deploy_agent(
             "status": result.deployment_status.value,
             "url": result.url,
         }
+        if deploy_type == "k8s":
+            service_details = await _k8s_service_details(deployment_id)
+            if service_details is not None:
+                namespace, service_name, _ = service_details
+                response.update({
+                    "url": _external_agent_service_url(request, deployment_id),
+                    "service_name": service_name,
+                    "namespace": namespace,
+                })
 
         return JSONResponse(
             status_code=status.HTTP_201_CREATED,
@@ -270,12 +333,16 @@ async def list_agents(
         # 过滤内部实现细节
         filtered_deployments = []
         for dep in deployments:
+            service_details = await _k8s_service_details(dep.deployment_id)
             filtered_deployments.append({
                 "deployment_id": dep.deployment_id,
                 "name": dep.name,
                 "status": dep.deployment_status.value,
-                "url": dep.url,
+                "url": _external_agent_service_url(request, dep.deployment_id)
+                if service_details is not None else dep.url,
                 "port": dep.data.get("port") if dep.data else None,
+                "service_name": service_details[1] if service_details is not None else None,
+                "namespace": service_details[0] if service_details is not None else None,
             })
 
         return {"deployments": filtered_deployments}
@@ -303,13 +370,17 @@ async def get_agent(request: Request, deployment_id: str):
                 detail=f"Deployment {deployment_id} not found"
             )
         # 过滤内部实现细节
+        service_details = await _k8s_service_details(deployment_id)
         return {
             "deployment_id": deployment.deployment_id,
             "name": deployment.name,
             "status": deployment.deployment_status.value,
-            "url": deployment.url,
+            "url": _external_agent_service_url(request, deployment_id)
+            if service_details is not None else deployment.url,
             "port": deployment.data.get("port") if deployment.data else None,
             "type": deployment.deployment_type.value,
+            "service_name": service_details[1] if service_details is not None else None,
+            "namespace": service_details[0] if service_details is not None else None,
             "created_at": deployment.created_at,
             "updated_at": deployment.updated_at,
         }
@@ -321,6 +392,114 @@ async def get_agent(request: Request, deployment_id: str):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to get deployment: {str(e)}",
         ) from e
+
+
+@app.api_route(
+    "/api/v1/agents/{deployment_id}/service/{service_path:path}",
+    methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
+)
+async def proxy_agent_service(
+    request: Request,
+    deployment_id: str,
+    service_path: str,
+):
+    """
+    为集群外客户端代理 Agent Service。
+
+    deployment_id 唯一确定目标 Service，Service 再由 Kubernetes
+    在属于该 Agent 的 Pod 副本之间进行负载均衡。
+    """
+    deployment = await manager.get_deployment(deployment_id)
+    if deployment is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Deployment {deployment_id} not found",
+        )
+    if deployment.deployment_status != DeploymentStatus.RUNNING:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Deployment {deployment_id} is not running",
+        )
+
+    service_details = await _k8s_service_details(deployment_id)
+    if service_details is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Deployment {deployment_id} is not a K8s deployment",
+        )
+
+    namespace, service_name, service_port = service_details
+    api_client = await _get_k8s_proxy_api_client()
+    raw_body = await request.body()
+    content_type = request.headers.get("content-type", "application/octet-stream")
+    proxy_body = None
+    if raw_body:
+        if "json" in content_type.lower():
+            try:
+                proxy_body = await request.json()
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Invalid JSON request body",
+                ) from exc
+        else:
+            proxy_body = raw_body
+    header_params = {
+        "Accept": request.headers.get("accept", "*/*"),
+        "Content-Type": content_type,
+    }
+    query_params = list(request.query_params.multi_items())
+    qualified_service_name = f"http:{service_name}:{service_port}"
+
+    try:
+        upstream = await api_client.call_api(
+            "/api/v1/namespaces/{namespace}/services/{service}/proxy/{path}",
+            request.method,
+            path_params={
+                "namespace": namespace,
+                "service": qualified_service_name,
+                "path": service_path,
+            },
+            query_params=query_params,
+            header_params=header_params,
+            body=proxy_body,
+            response_types_map={"200": "str"},
+            auth_settings=["BearerToken"],
+            _return_http_data_only=False,
+            _preload_content=False,
+            _request_timeout=(10, None),
+        )
+    except Exception as exc:
+        logger.exception(
+            "Failed to proxy Agent service: deployment_id=%s, service=%s",
+            deployment_id,
+            service_name,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Agent service proxy failed: {exc}",
+        ) from exc
+
+    async def _stream_upstream() -> AsyncIterator[bytes]:
+        try:
+            async for chunk in upstream.content.iter_any():
+                if chunk:
+                    yield chunk
+        finally:
+            upstream.release()
+
+    response_headers = {}
+    for header_name in ("cache-control", "content-disposition"):
+        header_value = upstream.headers.get(header_name)
+        if header_value:
+            response_headers[header_name] = header_value
+
+    return StreamingResponse(
+        _stream_upstream(),
+        status_code=upstream.status,
+        media_type=upstream.headers.get("content-type", "application/octet-stream"),
+        headers=response_headers,
+    )
 
 
 @app.delete("/api/v1/agents/{deployment_id}")

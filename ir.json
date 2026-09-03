@@ -1,0 +1,82 @@
+{
+  "version": "0.1.1",
+  "agent": {
+    "agent_id": "local-siliconflow-qwen3-8b",
+    "agent_version": "draft",
+    "latest_publish_time": null,
+    "latest_publish_version": null,
+    "primary_id": 1,
+    "space_id": "local",
+    "agent_name": "SiliconFlow Qwen3 本地测试助手",
+    "description": "用于验证 Agent Runtime、Docker Desktop Kubernetes 和 SiliconFlow 模型调用链路",
+    "agent_type": "react",
+    "icon": "🤖",
+    "edit_mode": "manual",
+    "prompt_template_name": "",
+    "auto_generated_prompt": "",
+    "opening_remarks": "你好，我是运行在本地 Kubernetes 中的测试助手。",
+    "default_response": "抱歉，我暂时无法回答这个问题。",
+    "configs": {
+      "system_prompt": "你是一个简洁、可靠的中文助手。优先直接回答用户的问题；不确定时明确说明。",
+      "retrieval_config": {
+        "topk": 5,
+        "use_sync": false,
+        "use_agent": false,
+        "retrieval_type": 2,
+        "score_threshold": 0.5
+      }
+    },
+    "plugins": [],
+    "workflows": [],
+    "model_id": 1,
+    "agent_model_config": {
+      "top_p": 0.9,
+      "timeout": 300,
+      "temperature": 0.7
+    },
+    "prompt_template": [],
+    "constraint": {
+      "max_iteration": 5,
+      "reserved_max_chat_rounds": 10
+    },
+    "prompt_tuning": {},
+    "triggers": [],
+    "knowledge": [],
+    "memory": {
+      "max_tokens": 4096,
+      "memory_base": null,
+      "variable_config": [],
+      "user_profile_config": false,
+      "summary_memory_config": false,
+      "episodic_memory_config": false,
+      "longterm_memory_config": false,
+      "semantic_memory_config": false
+    }
+  },
+  "dependencies": {
+    "workflows": [],
+    "plugins": [],
+    "knowledge_bases": [],
+    "prompt_templates": []
+  },
+  "metadata": {
+    "export_time": "2026-09-02T00:00:00+08:00",
+    "export_by": "local-lab",
+    "agent_studio_version": "0.1.1"
+  },
+  "model_references": {
+    "1": {
+      "provider": "siliconflow",
+      "model_type": "Qwen/Qwen3-8B",
+      "name": "Qwen/Qwen3-8B",
+      "base_url": "https://api.siliconflow.cn/v1",
+      "api_key": "sk-ffyshczyopnuozktvommfaviqsuginjpvufvpquqkqykcoai",
+      "timeout": 300,
+      "parameters": {
+        "top_p": 0.9,
+        "max_tokens": 2048,
+        "temperature": 0.7
+      }
+    }
+  }
+}

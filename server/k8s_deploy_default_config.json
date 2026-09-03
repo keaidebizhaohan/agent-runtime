@@ -1,13 +1,11 @@
 {
   "namespace": "default",
-  "image": "xxx",
+  "image": "agent-runtime-lowcode:local",
   "image_pull_policy": "IfNotPresent",
-  "replicas": 1,
-  "container_port": 7888,
-  "service_port": 7888,
-  "service_type": "LoadBalancer",
-  "node_port": 30019,
-  "node_selector": {
-    "kubernetes.io/hostname": "k8s-node1"
-  }
+  "replicas": 2,
+  "container_port": 8090,
+  "service_port": 8090,
+  "service_type": "NodePort",
+  "node_port": null,
+  "node_selector": {}
 }

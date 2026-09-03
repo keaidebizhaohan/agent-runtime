@@ -12,6 +12,7 @@ dependencies = [
     "uvicorn==0.42.0",
     "python-dotenv>=1.0.0",
     "python-multipart>=0.0.6",
+    "kubernetes-asyncio==35.0.0",
     "openjiuwen-runtime-foundation==0.1.0",
     "openjiuwen-runtime-management==0.1.0"
 ]
