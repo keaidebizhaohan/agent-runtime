@@ -36,7 +36,14 @@ from openjiuwen_runtime.management.models.enums import (
     DeploymentType,
 )
 
-from .middleware.tenant import TenantContextMiddleware, get_tenant_context
+from .middleware.tenant import (
+    TenantContextMiddleware,
+    deployment_belongs_to_tenant,
+    get_tenant_context,
+    normalize_tenant_context,
+    require_deployment_tenant,
+    resolve_proxy_tenant,
+)
 from .utils import mask_userdata
 
 logger = get_logger(__name__)
@@ -282,6 +289,8 @@ async def deploy_agent(
             "name": result.name,
             "status": result.deployment_status.value,
             "url": result.url,
+            "user_id": user_id,
+            "space_id": space_id,
         }
         if deploy_type == "k8s":
             service_details = await _k8s_service_details(deployment_id)
@@ -325,10 +334,15 @@ async def list_agents(
                 deployment_status=DeploymentStatus(status_filter)
                 if status_filter
                 else None,
-                user_id=user_id,
-                space_id=space_id,
+                # 缺省租户需兼容历史 NULL 记录，留到下方统一过滤。
+                user_id=user_id if user_id != "anonymous" else None,
+                space_id=space_id if space_id != "default" else None,
             )
         )
+        deployments = [
+            dep for dep in deployments
+            if deployment_belongs_to_tenant(dep, user_id, space_id)
+        ]
 
         # 过滤内部实现细节
         filtered_deployments = []
@@ -343,6 +357,12 @@ async def list_agents(
                 "port": dep.data.get("port") if dep.data else None,
                 "service_name": service_details[1] if service_details is not None else None,
                 "namespace": service_details[0] if service_details is not None else None,
+                "user_id": normalize_tenant_context(
+                    dep.user_id, dep.space_id
+                )[0],
+                "space_id": normalize_tenant_context(
+                    dep.user_id, dep.space_id
+                )[1],
             })
 
         return {"deployments": filtered_deployments}
@@ -369,6 +389,7 @@ async def get_agent(request: Request, deployment_id: str):
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Deployment {deployment_id} not found"
             )
+        require_deployment_tenant(deployment, user_id, space_id)
         # 过滤内部实现细节
         service_details = await _k8s_service_details(deployment_id)
         return {
@@ -381,6 +402,12 @@ async def get_agent(request: Request, deployment_id: str):
             "type": deployment.deployment_type.value,
             "service_name": service_details[1] if service_details is not None else None,
             "namespace": service_details[0] if service_details is not None else None,
+            "user_id": normalize_tenant_context(
+                deployment.user_id, deployment.space_id
+            )[0],
+            "space_id": normalize_tenant_context(
+                deployment.user_id, deployment.space_id
+            )[1],
             "created_at": deployment.created_at,
             "updated_at": deployment.updated_at,
         }
@@ -415,6 +442,27 @@ async def proxy_agent_service(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Deployment {deployment_id} not found",
         )
+    raw_body = await request.body()
+    content_type = request.headers.get("content-type", "application/octet-stream")
+    proxy_body = None
+    if raw_body:
+        if "json" in content_type.lower():
+            try:
+                proxy_body = await request.json()
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Invalid JSON request body",
+                ) from exc
+        else:
+            proxy_body = raw_body
+    user_id, space_id, proxy_body = resolve_proxy_tenant(
+        request,
+        service_path,
+        proxy_body,
+    )
+    require_deployment_tenant(deployment, user_id, space_id)
+
     if deployment.deployment_status != DeploymentStatus.RUNNING:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -430,20 +478,6 @@ async def proxy_agent_service(
 
     namespace, service_name, service_port = service_details
     api_client = await _get_k8s_proxy_api_client()
-    raw_body = await request.body()
-    content_type = request.headers.get("content-type", "application/octet-stream")
-    proxy_body = None
-    if raw_body:
-        if "json" in content_type.lower():
-            try:
-                proxy_body = await request.json()
-            except ValueError as exc:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Invalid JSON request body",
-                ) from exc
-        else:
-            proxy_body = raw_body
     header_params = {
         "Accept": request.headers.get("accept", "*/*"),
         "Content-Type": content_type,
@@ -509,6 +543,14 @@ async def delete_agent(request: Request, deployment_id: str):
     user_id, space_id = get_tenant_context(request)
 
     try:
+        deployment = await manager.get_deployment(deployment_id)
+        if not deployment:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Deployment {deployment_id} not found",
+            )
+        require_deployment_tenant(deployment, user_id, space_id)
+
         success = await manager.delete_deployment(
             deployment_id
         )

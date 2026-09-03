@@ -5,7 +5,7 @@
   "replicas": 2,
   "container_port": 8090,
   "service_port": 8090,
-  "service_type": "NodePort",
+  "service_type": "ClusterIP",
   "node_port": null,
   "node_selector": {}
 }
