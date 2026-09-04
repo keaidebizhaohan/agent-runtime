@@ -115,6 +115,7 @@ from openjiuwen_runtime.examples.lowcode_agent.workflow_registration import (
 )
 from openjiuwen_runtime.examples.lowcode_agent.session_checkpointer import (
     init_session_checkpointer,
+    verify_session_checkpointer,
 )
 from openjiuwen_runtime.service.app.agent_app import AgentApp
 
@@ -452,6 +453,7 @@ async def init():
     logger.info(f"设置 WORKFLOW_EXECUTE_TIMEOUT={workflow_timeout} 秒")
 
     runner_started = await Runner.start()
+    verify_session_checkpointer()
     logger.info(f"Runner 启动状态: {runner_started}")
 
     logger.info("开始编译 Agent 配置...")
@@ -574,7 +576,15 @@ async def query(msgs, request, cancel_event=None) -> AsyncIterator[Tuple[dict, b
         return
 
     logger.info(f"用户查询内容: {last_user_msg[:100]}...")
-    inputs = {"query": last_user_msg}
+    # LLMAgent 当前仍走 LegacyBaseAgent 分支；该实现忽略 Runner 的 session=
+    # 字符串，转而从 inputs["conversation_id"] 创建会话。因此必须在这里
+    # 显式传入内部四段式会话键，否则所有请求都会退化到 default_session。
+    inputs = {
+        "query": last_user_msg,
+        "conversation_id": session_id,
+        "user_id": request.user_id,
+        "space_id": request.space_id,
+    }
 
     try:
         chunk_count = 0

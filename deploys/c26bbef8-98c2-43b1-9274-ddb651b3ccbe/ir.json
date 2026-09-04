@@ -26,7 +26,7 @@
         "score_threshold": 0.5
       }
     },
-    "plugins": [],  
+    "plugins": [],
     "workflows": [],
     "model_id": 1,
     "agent_model_config": {

@@ -50,13 +50,8 @@ async def _ping_redis(url: str) -> None:
         await client.aclose()
 
 
-async def _create_redis_checkpointer(url: str, ttl_minutes: float | None):
-    # 导入模块会执行 RedisCheckpointerFactory.register("redis")。
-    import openjiuwen.extensions.checkpointer.redis.checkpointer  # noqa: F401
-    from openjiuwen.core.session.checkpointer.checkpointer import (
-        CheckpointerConfig,
-        CheckpointerFactory,
-    )
+def _redis_checkpointer_config(url: str, ttl_minutes: float | None):
+    from openjiuwen.core.session.checkpointer.checkpointer import CheckpointerConfig
 
     conf: dict = {"connection": {"url": url}}
     if ttl_minutes is not None:
@@ -67,9 +62,7 @@ async def _create_redis_checkpointer(url: str, ttl_minutes: float | None):
                 default=True,
             ),
         }
-    return await CheckpointerFactory.create(
-        CheckpointerConfig(type="redis", conf=conf)
-    )
+    return CheckpointerConfig(type="redis", conf=conf)
 
 
 async def init_session_checkpointer() -> bool:
@@ -93,15 +86,41 @@ async def init_session_checkpointer() -> bool:
 
     ttl_minutes = _positive_float_env("CHECKPOINTER_DEFAULT_TTL_MINUTES")
     await _ping_redis(url)
-    checkpointer = await _create_redis_checkpointer(url, ttl_minutes)
+    # 使用 Runner 的正式配置入口。Runner.start() 会据此创建并注册 Redis
+    # Checkpointer；不要在 Runner.start() 之外维护另一套隐式全局状态。
+    from openjiuwen.core.runner import Runner
 
-    from openjiuwen.core.session.checkpointer.checkpointer import CheckpointerFactory
-
-    CheckpointerFactory.set_default_checkpointer(checkpointer)
+    runner_config = Runner.get_config().model_copy(deep=True)
+    runner_config.checkpointer_config = _redis_checkpointer_config(
+        url,
+        ttl_minutes,
+    )
+    Runner.set_config(runner_config)
     _initialized = True
     logger.info(
-        "Shared Redis session checkpointer initialized: destination=%s, ttl_minutes=%s",
+        "Shared Redis session checkpointer configured: destination=%s, ttl_minutes=%s",
         _safe_redis_destination(url),
         ttl_minutes,
     )
     return True
+
+
+def verify_session_checkpointer() -> None:
+    """配置 Redis 时禁止静默回退到进程内存。"""
+    url = (os.getenv("CHECKPOINTER_REDIS_URL") or "").strip()
+    if not url:
+        return
+
+    from openjiuwen.core.session.checkpointer.checkpointer import CheckpointerFactory
+    from openjiuwen.extensions.checkpointer.redis.checkpointer import RedisCheckpointer
+
+    checkpointer = CheckpointerFactory.get_checkpointer()
+    if not isinstance(checkpointer, RedisCheckpointer):
+        raise RuntimeError(
+            "CHECKPOINTER_REDIS_URL is configured, but Runner did not start "
+            f"with RedisCheckpointer (actual={type(checkpointer).__name__})"
+        )
+    logger.info(
+        "Shared Redis session checkpointer is active: destination=%s",
+        _safe_redis_destination(url),
+    )

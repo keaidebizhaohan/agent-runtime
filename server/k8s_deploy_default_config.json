@@ -1,6 +1,6 @@
 {
   "namespace": "default",
-  "image": "agent-runtime-lowcode:local",
+  "image": "agent-runtime-lowcode:redis-session-v2",
   "image_pull_policy": "IfNotPresent",
   "replicas": 2,
   "container_port": 8090,

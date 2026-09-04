@@ -210,7 +210,11 @@ class AgentApp(BaseApp):
                                 if chunk_count <= 3:
                                     logger.info(f"[generate] yielding chunk #{chunk_count}, "
                                                 f"type={type(processed_msg).__name__}")
-                                yield f"data: {json.dumps(processed_msg)}\n\n"
+                                yield (
+                                    "data: "
+                                    f"{json.dumps(processed_msg, ensure_ascii=False, default=str)}"
+                                    "\n\n"
+                                )
                         finally:
                             cancel_event.set()
 
